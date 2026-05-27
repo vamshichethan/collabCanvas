@@ -1,10 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { io, type Socket } from 'socket.io-client';
+import { api } from '../lib/api';
 import { createClientId } from '../lib/ids';
 import type {
+  ActivityItem,
   BoardOperation,
+  ChatMessage,
   ClientOperation,
   CursorPosition,
+  ObjectComment,
   OperationAck,
   Participant,
   WhiteboardObject,
@@ -46,6 +50,9 @@ export function useRoomCollaboration(roomId: string) {
   const [connected, setConnected] = useState(false);
   const [lastSeenSequence, setLastSeenSequence] = useState(lastSeenSequenceNumber.current);
   const [permissionError, setPermissionError] = useState<string | null>(null);
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
+  const [comments, setComments] = useState<ObjectComment[]>([]);
+  const [activityItems, setActivityItems] = useState<ActivityItem[]>([]);
   const clearPermissionError = useCallback(() => setPermissionError(null), []);
 
   const markSequenceSeen = useCallback(
@@ -66,6 +73,28 @@ export function useRoomCollaboration(roomId: string) {
     },
     [identity.userId, markSequenceSeen],
   );
+
+  useEffect(() => {
+    let active = true;
+
+    Promise.all([api.getChat(roomId), api.getComments(roomId), api.getActivity(roomId)])
+      .then(([messages, nextComments, nextActivity]) => {
+        if (!active) return;
+        setChatMessages(messages);
+        setComments(nextComments);
+        setActivityItems(nextActivity);
+      })
+      .catch(() => {
+        if (!active) return;
+        setChatMessages([]);
+        setComments([]);
+        setActivityItems([]);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [roomId]);
 
   useEffect(() => {
     const socket = io(socketUrl, {
@@ -90,6 +119,8 @@ export function useRoomCollaboration(roomId: string) {
         roomId,
         afterSequenceNumber: lastSeenSequenceNumber.current,
       });
+      socket.emit('chat:history', { roomId });
+      socket.emit('comment:list', { boardId: roomId });
     });
     socket.on('disconnect', () => setConnected(false));
     socket.on('room:participants', setParticipants);
@@ -133,6 +164,23 @@ export function useRoomCollaboration(roomId: string) {
         return next;
       });
     });
+    socket.on('chat:history', (messages: ChatMessage[]) => setChatMessages(messages));
+    socket.on('chat:new', (message: ChatMessage) => {
+      setChatMessages((current) => [...current.filter((item) => item.id !== message.id), message]);
+    });
+    socket.on('comment:list', (nextComments: ObjectComment[]) => setComments(nextComments));
+    socket.on('comment:new', (comment: ObjectComment) => {
+      setComments((current) => [...current.filter((item) => item.id !== comment.id), comment]);
+    });
+    socket.on('comment:resolve', (comment: ObjectComment) => {
+      setComments((current) => current.map((item) => (item.id === comment.id ? comment : item)));
+    });
+    socket.on('comment:delete', (payload: { commentId: string }) => {
+      setComments((current) => current.filter((item) => item.id !== payload.commentId));
+    });
+    socket.on('activity:new', (activity: ActivityItem) => {
+      setActivityItems((current) => [...current.filter((item) => item.id !== activity.id), activity]);
+    });
 
     return () => {
       socket.emit('room:leave', { roomId, userId: identity.userId });
@@ -144,6 +192,34 @@ export function useRoomCollaboration(roomId: string) {
   const emitOperation = useCallback((operation: ClientOperation) => {
     socketRef.current?.emit('operation:submit', operation);
   }, []);
+
+  const sendChat = useCallback(
+    (message: string) => {
+      socketRef.current?.emit('chat:send', { roomId, userId: identity.userId, message });
+    },
+    [identity.userId, roomId],
+  );
+
+  const addComment = useCallback(
+    (objectId: string, message: string) => {
+      socketRef.current?.emit('comment:add', { roomId, boardId: roomId, objectId, userId: identity.userId, message });
+    },
+    [identity.userId, roomId],
+  );
+
+  const resolveComment = useCallback(
+    (commentId: string, resolved: boolean) => {
+      socketRef.current?.emit('comment:resolve', { roomId, userId: identity.userId, commentId, resolved });
+    },
+    [identity.userId, roomId],
+  );
+
+  const deleteComment = useCallback(
+    (commentId: string) => {
+      socketRef.current?.emit('comment:delete', { roomId, userId: identity.userId, commentId });
+    },
+    [identity.userId, roomId],
+  );
 
   const emitCursor = useCallback(
     (x: number, y: number) => {
@@ -171,10 +247,17 @@ export function useRoomCollaboration(roomId: string) {
     initialBoard,
     remoteOperation,
     remoteCursors: Object.values(remoteCursors),
+    chatMessages,
+    comments,
+    activityItems,
     lastSeenSequence,
     permissionError,
     clearPermissionError,
     emitOperation,
     emitCursor,
+    sendChat,
+    addComment,
+    resolveComment,
+    deleteComment,
   };
 }

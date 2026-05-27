@@ -56,8 +56,12 @@ npm run build
 src/
   components/
     CanvasBoard.tsx
+    CollaborationSidebar.tsx
+    ParticipantPanel.tsx
+    RoomSettingsPanel.tsx
     ToolButton.tsx
     Toolbar.tsx
+    VersionHistoryPanel.tsx
   hooks/
     useCanvasHistory.ts
     useRoomCollaboration.ts
@@ -75,6 +79,10 @@ backend/
     seed.ts
   src/
     apiRoutes.ts
+    activityService.ts
+    chatService.ts
+    commentService.ts
+    messageUtils.ts
     operationManager.ts
     persistenceManager.ts
     permissionMiddleware.ts
@@ -84,6 +92,8 @@ backend/
     roomManager.ts
     roomSettingsService.ts
     server.ts
+    socketChatHandlers.ts
+    socketCommentHandlers.ts
     socketHandlers.ts
     types.ts
 ```
@@ -186,6 +196,7 @@ Prisma models live in `backend/prisma/schema.prisma`:
 - `BoardVersion`
 - `Comment`
 - `ChatMessage`
+- `ActivityLog`
 
 Use Neon PostgreSQL or Supabase PostgreSQL by putting the connection string in `backend/.env` as `DATABASE_URL`.
 
@@ -205,6 +216,9 @@ Use Neon PostgreSQL or Supabase PostgreSQL by putting the connection string in `
 - `POST /api/boards/:boardId/versions` creates a named version from the current board state.
 - `POST /api/boards/:boardId/restore/:versionId` restores a named version and records a snapshot.
 - `GET /api/boards/:boardId/snapshots` lists autosave and restore snapshots.
+- `GET /api/rooms/:roomId/chat` loads room chat history.
+- `GET /api/boards/:boardId/comments` loads object-level comments.
+- `GET /api/rooms/:roomId/activity` loads the room activity feed.
 
 ## Snapshots And Versions
 
@@ -219,3 +233,19 @@ Permissions are centralized in `backend/src/permissionManager.ts`, `backend/src/
 - `VIEWER`: can view the board, move cursors, read chat, and comment only when `allowViewerComments` is enabled.
 
 Viewer mode is enforced twice: the frontend disables drawing controls and passes `readOnly` into the board, while the backend still rejects viewer drawing operations through `operation:submit`. Editors are also blocked from role changes, room settings changes, and version restores. If `lockBoardEditing` is enabled, only owners can keep editing.
+
+## Room Chat
+
+Room chat is persisted in `ChatMessage` and delivered in real time with Socket.IO. When a room opens, the frontend loads history through `GET /api/rooms/:roomId/chat` and also asks the socket for `chat:history` after joining. New messages are sent with `chat:send`; the backend trims and sanitizes the message, checks the persisted participant role, saves it, and broadcasts `chat:new` to everyone in the room.
+
+Owners and editors can chat. Viewers can read chat and can send only when the room setting that allows viewer comments is enabled.
+
+## Object Comments
+
+The canvas keeps Fabric as the renderer while selection events expose the selected `whiteboardId` to React. The right sidebar filters comments by that object ID, so comments attach to structured board objects rather than canvas pixels. Comments are loaded through `GET /api/boards/:boardId/comments`, created with `comment:add`, updated with `comment:resolve`, and deleted with `comment:delete`.
+
+Comment badges are rendered as lightweight overlays near objects with unresolved comments. Owners can resolve and delete any comment; editors can add comments and delete their own comments; viewers can add comments only when viewer comments are enabled.
+
+## Activity Feed
+
+`ActivityLog` stores human-readable room events for joins, leaves, object creates/deletes, comments, and version actions. The frontend loads existing activity through `GET /api/rooms/:roomId/activity` and receives live `activity:new` events as the backend records new logs.

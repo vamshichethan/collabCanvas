@@ -24,6 +24,16 @@ enum OperationType {
   DELETE
 }
 
+enum ActivityType {
+  JOIN
+  LEAVE
+  OBJECT_CREATE
+  OBJECT_DELETE
+  COMMENT_ADD
+  VERSION_CREATE
+  VERSION_RESTORE
+}
+
 model User {
   id           String             @id
   name         String
@@ -37,6 +47,7 @@ model User {
   versions     BoardVersion[]
   comments     Comment[]
   chatMessages ChatMessage[]
+  activityLogs ActivityLog[]
 
   @@index([email])
 }
@@ -54,6 +65,7 @@ model Room {
   participants        Participant[]
   operations          DrawingOperation[]
   chatMessages        ChatMessage[]
+  activityLogs        ActivityLog[]
   createdAt           DateTime           @default(now())
   updatedAt           DateTime           @updatedAt
 
@@ -175,4 +187,19 @@ model ChatMessage {
 
   @@index([roomId])
   @@index([userId])
+}
+
+model ActivityLog {
+  id        String       @id @default(cuid())
+  roomId    String
+  userId    String?
+  type      ActivityType
+  message   String
+  createdAt DateTime     @default(now())
+  room      Room         @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  user      User?        @relation(fields: [userId], references: [id])
+
+  @@index([roomId])
+  @@index([userId])
+  @@index([type])
 }

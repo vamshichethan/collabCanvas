@@ -1,4 +1,4 @@
-import type { BoardVersionRecord, DashboardRoom, WhiteboardObject } from '../types';
+import type { ActivityItem, BoardVersionRecord, ChatMessage, DashboardRoom, ObjectComment, WhiteboardObject } from '../types';
 
 const apiUrl = import.meta.env.VITE_API_URL ?? 'http://localhost:5000';
 
@@ -16,6 +16,14 @@ export const api = {
 
   async getRoom(roomId: string) {
     return request<DashboardRoom>(`/api/rooms/${encodeURIComponent(roomId)}`);
+  },
+
+  async getChat(roomId: string) {
+    return request<ChatMessage[]>(`/api/rooms/${encodeURIComponent(roomId)}/chat`);
+  },
+
+  async getActivity(roomId: string) {
+    return request<ActivityItem[]>(`/api/rooms/${encodeURIComponent(roomId)}/activity`);
   },
 
   async updateRoomSettings(
@@ -51,6 +59,10 @@ export const api = {
 
   async getVersions(boardId: string) {
     return request<BoardVersionRecord[]>(`/api/boards/${encodeURIComponent(boardId)}/versions`);
+  },
+
+  async getComments(boardId: string) {
+    return request<ObjectComment[]>(`/api/boards/${encodeURIComponent(boardId)}/comments`);
   },
 
   async createVersion(boardId: string, name: string, createdBy: string) {

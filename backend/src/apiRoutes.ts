@@ -1,4 +1,7 @@
 import { Router } from 'express';
+import type { ActivityService } from './activityService.js';
+import type { ChatService } from './chatService.js';
+import type { CommentService } from './commentService.js';
 import { OperationManager } from './operationManager.js';
 import { requireRoomAction } from './permissionMiddleware.js';
 import { normalizeRole, PermissionManager } from './permissionManager.js';
@@ -8,6 +11,7 @@ export const createApiRoutes = (
   persistence: PersistenceManager,
   operations: OperationManager,
   permissions: PermissionManager,
+  services: { chat: ChatService; comments: CommentService; activity: ActivityService },
 ) => {
   const router = Router();
 
@@ -160,7 +164,9 @@ export const createApiRoutes = (
         return;
       }
       const { name = 'Untitled version' } = request.body ?? {};
-      response.status(201).json(await persistence.createVersion(request.params.boardId, name, createdBy));
+      const version = await persistence.createVersion(request.params.boardId, name, createdBy);
+      if (roomId) await services.activity.create(roomId, 'VERSION_CREATE', `${createdBy} created version "${name}"`, createdBy);
+      response.status(201).json(version);
     } catch (error) {
       next(error);
     }
@@ -177,6 +183,7 @@ export const createApiRoutes = (
       }
       const restored = await persistence.restoreVersion(request.params.boardId, request.params.versionId, userId);
       operations.invalidateBoard(request.params.boardId);
+      if (roomId) await services.activity.create(roomId, 'VERSION_RESTORE', `${userId} restored a board version`, userId);
       response.json(restored);
     } catch (error) {
       next(error);
@@ -191,6 +198,30 @@ export const createApiRoutes = (
     }
   });
 
+  router.get('/rooms/:roomId/chat', async (request, response, next) => {
+    try {
+      response.json(await services.chat.list(request.params.roomId));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.get('/boards/:boardId/comments', async (request, response, next) => {
+    try {
+      response.json(await services.comments.list(request.params.boardId));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.get('/rooms/:roomId/activity', async (request, response, next) => {
+    try {
+      response.json(await services.activity.list(request.params.roomId));
+    } catch (error) {
+      next(error);
+    }
+  });
+
   router.post('/boards/:boardId/comments', async (request, response, next) => {
     try {
       const roomId = await persistence.getBoardRoomId(request.params.boardId);
@@ -200,9 +231,9 @@ export const createApiRoutes = (
         response.status(403).json({ error: reason });
         return;
       }
-      response.status(201).json(
-        await persistence.createComment(request.params.boardId, userId, request.body.message, request.body.objectId),
-      );
+      const comment = await services.comments.add(request.params.boardId, request.body.objectId, userId, request.body.message);
+      if (roomId) await services.activity.create(roomId, 'COMMENT_ADD', `${comment.userName} commented on an object`, userId);
+      response.status(201).json(comment);
     } catch (error) {
       next(error);
     }
@@ -211,12 +242,12 @@ export const createApiRoutes = (
   router.post('/rooms/:roomId/chat', async (request, response, next) => {
     try {
       const userId = String(request.body?.userId ?? '');
-      const participant = await permissions.getParticipant(request.params.roomId, userId);
-      if (!participant) {
-        response.status(403).json({ error: 'user is not a room participant' });
+      const reason = await permissions.canChat(request.params.roomId, userId);
+      if (reason) {
+        response.status(403).json({ error: reason });
         return;
       }
-      response.status(201).json(await persistence.createChatMessage(request.params.roomId, userId, request.body.message));
+      response.status(201).json(await services.chat.create(request.params.roomId, userId, request.body.message));
     } catch (error) {
       next(error);
     }

@@ -1,4 +1,5 @@
 import type { Server, Socket } from 'socket.io';
+import { ActivityService } from './activityService.js';
 import { OperationManager } from './operationManager.js';
 import { PersistenceManager } from './persistenceManager.js';
 import { PermissionManager } from './permissionManager.js';
@@ -11,10 +12,11 @@ type Managers = {
   operations: OperationManager;
   permissions: PermissionManager;
   persistence: PersistenceManager;
+  activity: ActivityService;
 };
 
 export const registerSocketHandlers = (io: Server, socket: Socket, managers: Managers) => {
-  const { rooms, operations, permissions, persistence } = managers;
+  const { rooms, operations, permissions, persistence, activity } = managers;
 
   socket.on('room:create', async (payload: { userId: string; name: string; role?: Participant['role'] }, ack?: (response: { roomId: string }) => void) => {
     try {
@@ -52,6 +54,8 @@ export const registerSocketHandlers = (io: Server, socket: Socket, managers: Man
       ack?.({ ok: true });
       socket.to(roomId).emit('user:joined', participant);
       emitParticipants(io, rooms, roomId);
+      const joinedActivity = await activity.create(roomId, 'JOIN', `${participant.name} joined the room`, participant.userId);
+      io.to(roomId).emit('activity:new', joinedActivity);
       const boardState = await operations.getBoardState(roomId);
       socket.emit('board:full-sync', {
         board: boardState.board,
@@ -66,6 +70,9 @@ export const registerSocketHandlers = (io: Server, socket: Socket, managers: Man
   socket.on('room:leave', (payload: { roomId: string; userId: string }) => {
     socket.leave(payload.roomId);
     leaveRoom(io, rooms, payload.roomId, payload.userId);
+    void activity.create(payload.roomId, 'LEAVE', `${payload.userId} left the room`, payload.userId).then((item) => {
+      io.to(payload.roomId).emit('activity:new', item);
+    });
   });
 
   socket.on('operation:submit', async (operation: ClientOperation) => {
@@ -88,6 +95,12 @@ export const registerSocketHandlers = (io: Server, socket: Socket, managers: Man
       }
 
       const appliedOperation = await operations.submit(operation);
+      if (appliedOperation.type === 'CREATE' || appliedOperation.type === 'DELETE') {
+        const activityType = appliedOperation.type === 'CREATE' ? 'OBJECT_CREATE' : 'OBJECT_DELETE';
+        const message = `${operation.userId} ${appliedOperation.type === 'CREATE' ? 'created' : 'deleted'} an object`;
+        const item = await activity.create(operation.roomId, activityType, message, operation.userId);
+        io.to(operation.roomId).emit('activity:new', item);
+      }
       socket.emit('operation:ack', {
         accepted: true,
         opId: operation.opId,
@@ -160,6 +173,9 @@ export const registerSocketHandlers = (io: Server, socket: Socket, managers: Man
     rooms.removeSocket(socket.id).forEach(({ roomId, participant, participants }) => {
       socket.to(roomId).emit('user:left', participant);
       io.to(roomId).emit('room:participants', participants);
+      void activity.create(roomId, 'LEAVE', `${participant.name} left the room`, participant.userId).then((item) => {
+        io.to(roomId).emit('activity:new', item);
+      });
     });
   });
 };

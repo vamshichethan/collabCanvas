@@ -114,3 +114,42 @@ export type DashboardRoom = {
   }>;
   updatedAt: string;
 };
+
+export type ChatMessage = {
+  id: string;
+  roomId: string;
+  userId: string;
+  userName: string;
+  message: string;
+  createdAt: string;
+};
+
+export type ObjectComment = {
+  id: string;
+  boardId: string;
+  roomId: string;
+  objectId: string;
+  userId: string;
+  userName: string;
+  message: string;
+  resolved: boolean;
+  createdAt: string;
+};
+
+export type ActivityType =
+  | 'JOIN'
+  | 'LEAVE'
+  | 'OBJECT_CREATE'
+  | 'OBJECT_DELETE'
+  | 'COMMENT_ADD'
+  | 'VERSION_CREATE'
+  | 'VERSION_RESTORE';
+
+export type ActivityItem = {
+  id: string;
+  roomId: string;
+  userId?: string | null;
+  type: ActivityType;
+  message: string;
+  createdAt: string;
+};

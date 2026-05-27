@@ -50,6 +50,23 @@ export class PermissionManager {
     return canRole(participant.role, 'COMMENT') || participant.role === 'VIEWER' ? null : 'permission denied: COMMENT';
   }
 
+  async canChat(roomId: string, userId: string) {
+    return this.canComment(roomId, userId);
+  }
+
+  async canResolveComment(roomId: string, userId: string) {
+    const participant = await this.getParticipant(roomId, userId);
+    if (!participant) return 'user is not a room participant';
+    return participant.role === 'OWNER' ? null : 'only owners can resolve comments';
+  }
+
+  async canDeleteComment(roomId: string, actorId: string, commentUserId: string) {
+    const participant = await this.getParticipant(roomId, actorId);
+    if (!participant) return 'user is not a room participant';
+    if (participant.role === 'OWNER' || actorId === commentUserId) return null;
+    return 'cannot delete another user comment';
+  }
+
   async canManageParticipant(roomId: string, userId: string) {
     return this.requireAction(roomId, userId, 'CHANGE_ROLES');
   }

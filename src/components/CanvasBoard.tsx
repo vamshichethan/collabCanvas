@@ -27,7 +27,15 @@ import {
   tagFabricObject,
   updateWhiteboardObject,
 } from '../lib/whiteboardObjects';
-import type { BoardOperation, ClientOperation, CursorPosition, DrawingSettings, Tool, WhiteboardObject } from '../types';
+import type {
+  BoardOperation,
+  ClientOperation,
+  CursorPosition,
+  DrawingSettings,
+  ObjectComment,
+  Tool,
+  WhiteboardObject,
+} from '../types';
 
 type CanvasBoardProps = {
   activeTool: Tool;
@@ -42,6 +50,8 @@ type CanvasBoardProps = {
   onLocalOperation?: (operation: ClientOperation) => void;
   onCursorMove?: (x: number, y: number) => void;
   readOnly?: boolean;
+  comments?: ObjectComment[];
+  onSelectedObjectChange?: (objectId: string | null) => void;
 };
 
 type ToolbarHistoryProps = {
@@ -65,6 +75,8 @@ function CanvasBoard({
   onLocalOperation,
   onCursorMove,
   readOnly = false,
+  comments = [],
+  onSelectedObjectChange,
 }: CanvasBoardProps) {
   const canvasElementRef = useRef<HTMLCanvasElement | null>(null);
   const shellRef = useRef<HTMLDivElement | null>(null);
@@ -423,6 +435,15 @@ function CanvasBoard({
       commitObjects(nextObjects);
     });
     canvas.on('text:changed', () => syncObjectsFromCanvas());
+    canvas.on('selection:created', (event) => {
+      const target = event.selected?.[0];
+      onSelectedObjectChange?.((target as FabricObject & { whiteboardId?: string } | undefined)?.whiteboardId ?? null);
+    });
+    canvas.on('selection:updated', (event) => {
+      const target = event.selected?.[0];
+      onSelectedObjectChange?.((target as FabricObject & { whiteboardId?: string } | undefined)?.whiteboardId ?? null);
+    });
+    canvas.on('selection:cleared', () => onSelectedObjectChange?.(null));
 
     initializeHistory([]);
 
@@ -431,7 +452,15 @@ function CanvasBoard({
       canvas.dispose();
       canvasRef.current = null;
     };
-  }, [commitObjects, handleMouseDown, handleMouseMove, handleMouseUp, initializeHistory, syncObjectsFromCanvas]);
+  }, [
+    commitObjects,
+    handleMouseDown,
+    handleMouseMove,
+    handleMouseUp,
+    initializeHistory,
+    onSelectedObjectChange,
+    syncObjectsFromCanvas,
+  ]);
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -485,6 +514,10 @@ function CanvasBoard({
         onClear: handleClear,
       })
     : toolbar;
+  const commentCounts = comments.reduce<Record<string, number>>((counts, comment) => {
+    if (!comment.resolved) counts[comment.objectId] = (counts[comment.objectId] ?? 0) + 1;
+    return counts;
+  }, {});
 
   return (
     <section className="flex min-h-0 flex-1 flex-col gap-4">
@@ -525,6 +558,17 @@ function CanvasBoard({
                 </div>
               </div>
             ))}
+            {objects
+              .filter((object) => !object.deleted && commentCounts[object.id])
+              .map((object) => (
+                <div
+                  key={object.id}
+                  className="pointer-events-none absolute z-10 rounded-full border border-amber-200 bg-amber-400 px-2 py-1 text-xs font-bold text-amber-950 shadow-sm"
+                  style={{ transform: `translate(${Math.max(object.x + 10, 6)}px, ${Math.max(object.y + 10, 6)}px)` }}
+                >
+                  {commentCounts[object.id]}
+                </div>
+              ))}
           </div>
         </div>
 

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import CanvasBoard from './components/CanvasBoard';
+import CollaborationSidebar from './components/CollaborationSidebar';
 import ParticipantPanel from './components/ParticipantPanel';
 import RoomSettingsPanel from './components/RoomSettingsPanel';
 import Toolbar from './components/Toolbar';
@@ -131,6 +132,7 @@ function RoomPage({ roomId }: { roomId: string }) {
   const [restoredBoard, setRestoredBoard] = useState<WhiteboardObject[] | null>(null);
   const [room, setRoom] = useState<DashboardRoom | null>(null);
   const [toast, setToast] = useState<string | null>(null);
+  const [selectedObjectId, setSelectedObjectId] = useState<string | null>(null);
   const inviteLink = useMemo(() => `${window.location.origin}/room/${roomId}`, [roomId]);
   const collaboration = useRoomCollaboration(roomId);
   const currentDbParticipant = room?.participants.find((participant) => participant.userId === collaboration.userId);
@@ -139,6 +141,8 @@ function RoomPage({ roomId }: { roomId: string }) {
   const isViewer = currentRole === 'VIEWER';
   const boardLocked = Boolean(room?.lockBoardEditing && !isOwner);
   const readOnly = isViewer || boardLocked;
+  const canSendChat = currentRole === 'OWNER' || currentRole === 'EDITOR' || Boolean(room?.allowViewerComments);
+  const canComment = canSendChat;
 
   const loadRoom = async () => {
     try {
@@ -227,7 +231,7 @@ function RoomPage({ roomId }: { roomId: string }) {
             >
               {copied ? 'Copied' : 'Copy invite'}
             </button>
-            <p className="text-xs font-medium uppercase tracking-[0.18em] text-slate-400">Phase 5</p>
+            <p className="text-xs font-medium uppercase tracking-[0.18em] text-slate-400">Phase 7</p>
           </div>
         </div>
       </header>
@@ -248,28 +252,46 @@ function RoomPage({ roomId }: { roomId: string }) {
           onRestore={handleRestore}
           onError={setToast}
         />
-        <CanvasBoard
-          activeTool={activeTool}
-          settings={settings}
-          roomId={roomId}
-          userId={collaboration.userId}
-          userName={collaboration.userName}
-          initialObjects={restoredBoard ?? collaboration.initialBoard}
-          remoteOperation={collaboration.remoteOperation}
-          remoteCursors={collaboration.remoteCursors}
-          onLocalOperation={collaboration.emitOperation}
-          onCursorMove={collaboration.emitCursor}
-          readOnly={readOnly}
-          toolbar={
-            <Toolbar
-              activeTool={activeTool}
-              settings={settings}
-              disabled={readOnly}
-              onToolChange={setActiveTool}
-              onSettingsChange={setSettings}
-            />
-          }
-        />
+        <div className="grid min-h-0 gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
+          <CanvasBoard
+            activeTool={activeTool}
+            settings={settings}
+            roomId={roomId}
+            userId={collaboration.userId}
+            userName={collaboration.userName}
+            initialObjects={restoredBoard ?? collaboration.initialBoard}
+            remoteOperation={collaboration.remoteOperation}
+            remoteCursors={collaboration.remoteCursors}
+            comments={collaboration.comments}
+            onLocalOperation={collaboration.emitOperation}
+            onCursorMove={collaboration.emitCursor}
+            onSelectedObjectChange={setSelectedObjectId}
+            readOnly={readOnly}
+            toolbar={
+              <Toolbar
+                activeTool={activeTool}
+                settings={settings}
+                disabled={readOnly}
+                onToolChange={setActiveTool}
+                onSettingsChange={setSettings}
+              />
+            }
+          />
+          <CollaborationSidebar
+            currentUserId={collaboration.userId}
+            currentRole={currentRole}
+            selectedObjectId={selectedObjectId}
+            canSendChat={canSendChat}
+            canComment={canComment}
+            chatMessages={collaboration.chatMessages}
+            comments={collaboration.comments}
+            activityItems={collaboration.activityItems}
+            onSendChat={collaboration.sendChat}
+            onAddComment={collaboration.addComment}
+            onResolveComment={collaboration.resolveComment}
+            onDeleteComment={collaboration.deleteComment}
+          />
+        </div>
       </div>
     </main>
   );
