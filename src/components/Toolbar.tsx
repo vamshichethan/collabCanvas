@@ -28,6 +28,7 @@ type ToolbarProps = {
   settings: DrawingSettings;
   canUndo?: boolean;
   canRedo?: boolean;
+  disabled?: boolean;
   onToolChange: (tool: Tool) => void;
   onSettingsChange: (settings: DrawingSettings) => void;
   onUndo?: () => void;
@@ -45,6 +46,7 @@ function Toolbar({
   onUndo,
   onRedo,
   onClear,
+  disabled = false,
 }: ToolbarProps) {
   return (
     <aside className="flex w-full flex-wrap items-center gap-3 rounded-2xl border border-slate-200 bg-white p-3 shadow-sm">
@@ -55,6 +57,7 @@ function Toolbar({
             icon={tool.icon}
             label={tool.label}
             active={activeTool === tool.id}
+            disabled={disabled && tool.id !== 'select'}
             onClick={() => onToolChange(tool.id)}
           />
         ))}
@@ -68,6 +71,7 @@ function Toolbar({
           type="color"
           value={settings.color}
           onChange={(event) => onSettingsChange({ ...settings, color: event.target.value })}
+          disabled={disabled}
           className="h-8 w-full cursor-pointer rounded-md border-0 bg-transparent p-0"
         />
       </label>
@@ -79,6 +83,7 @@ function Toolbar({
           min="1"
           max="32"
           value={settings.strokeWidth}
+          disabled={disabled}
           onChange={(event) =>
             onSettingsChange({ ...settings, strokeWidth: Number(event.target.value) })
           }
@@ -91,7 +96,7 @@ function Toolbar({
       <div className="flex gap-2">
         <ToolButton icon={Undo2} label="Undo" disabled={!canUndo} onClick={() => onUndo?.()} />
         <ToolButton icon={Redo2} label="Redo" disabled={!canRedo} onClick={() => onRedo?.()} />
-        <ToolButton icon={Trash2} label="Clear canvas" onClick={() => onClear?.()} />
+        <ToolButton icon={Trash2} label="Clear canvas" disabled={disabled} onClick={() => onClear?.()} />
       </div>
     </aside>
   );

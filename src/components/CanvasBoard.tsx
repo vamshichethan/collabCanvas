@@ -41,6 +41,7 @@ type CanvasBoardProps = {
   remoteCursors?: CursorPosition[];
   onLocalOperation?: (operation: ClientOperation) => void;
   onCursorMove?: (x: number, y: number) => void;
+  readOnly?: boolean;
 };
 
 type ToolbarHistoryProps = {
@@ -63,6 +64,7 @@ function CanvasBoard({
   remoteCursors = [],
   onLocalOperation,
   onCursorMove,
+  readOnly = false,
 }: CanvasBoardProps) {
   const canvasElementRef = useRef<HTMLCanvasElement | null>(null);
   const shellRef = useRef<HTMLDivElement | null>(null);
@@ -81,6 +83,7 @@ function CanvasBoard({
   const emitOperations = useCallback(
     (previousObjects: WhiteboardObject[], nextObjects: WhiteboardObject[]) => {
       if (!roomId || !userId || !onLocalOperation) return;
+      if (readOnly) return;
 
       const previousById = new Map(previousObjects.map((object) => [object.id, object]));
       const nextById = new Map(nextObjects.map((object) => [object.id, object]));
@@ -120,7 +123,7 @@ function CanvasBoard({
         });
       });
     },
-    [onLocalOperation, roomId, userId],
+    [onLocalOperation, readOnly, roomId, userId],
   );
 
   const commitObjects = useCallback(
@@ -195,15 +198,15 @@ function CanvasBoard({
     const canvas = canvasRef.current;
     if (!canvas) return;
 
-    const freeDrawing = activeTool === 'pen';
+    const freeDrawing = activeTool === 'pen' && !readOnly;
     canvas.isDrawingMode = freeDrawing;
-    canvas.selection = activeTool === 'select';
+    canvas.selection = activeTool === 'select' && !readOnly;
     canvas.defaultCursor =
       activeTool === 'text' ? 'text' : activeTool === 'eraser' ? 'not-allowed' : freeDrawing ? 'crosshair' : 'default';
 
     canvas.getObjects().forEach((object) => {
-      object.selectable = activeTool === 'select';
-      object.evented = activeTool === 'select' || activeTool === 'eraser';
+      object.selectable = activeTool === 'select' && !readOnly;
+      object.evented = !readOnly && (activeTool === 'select' || activeTool === 'eraser');
     });
 
     if (freeDrawing) {
@@ -212,7 +215,7 @@ function CanvasBoard({
       brush.width = settings.strokeWidth;
       canvas.freeDrawingBrush = brush;
     }
-  }, [activeTool, settings]);
+  }, [activeTool, readOnly, settings]);
 
   const addText = useCallback(
     (canvas: Canvas, x: number, y: number) => {
@@ -297,6 +300,7 @@ function CanvasBoard({
       const tool = activeToolRef.current;
       const pointer = canvas.getPointer(event.e);
       onCursorMove?.(pointer.x, pointer.y);
+      if (readOnly) return;
 
       if (tool === 'eraser') {
         eraseTarget(event.e);
@@ -318,7 +322,7 @@ function CanvasBoard({
       isDrawingShapeRef.current = true;
       canvas.add(shape);
     },
-    [addText, createShape, eraseTarget],
+    [addText, createShape, eraseTarget, onCursorMove, readOnly],
   );
 
   const handleMouseMove = useCallback(
@@ -327,6 +331,7 @@ function CanvasBoard({
       const shape = shapeRef.current;
 
       if (activeToolRef.current === 'eraser') {
+        if (readOnly) return;
         eraseTarget(event.e);
         return;
       }
@@ -358,7 +363,7 @@ function CanvasBoard({
 
       canvas.requestRenderAll();
     },
-    [eraseTarget, onCursorMove],
+    [eraseTarget, onCursorMove, readOnly],
   );
 
   const handleMouseUp = useCallback(() => {
@@ -467,8 +472,9 @@ function CanvasBoard({
   }, [commitObjects, redo]);
 
   const handleClear = useCallback(() => {
+    if (readOnly) return;
     commitObjects([], { render: true });
-  }, [commitObjects]);
+  }, [commitObjects, readOnly]);
 
   const enhancedToolbar = isValidElement(toolbar)
     ? cloneElement(toolbar as ReactElement<Partial<ToolbarHistoryProps>>, {

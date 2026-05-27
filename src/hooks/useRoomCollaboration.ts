@@ -45,6 +45,8 @@ export function useRoomCollaboration(roomId: string) {
   const [remoteCursors, setRemoteCursors] = useState<Record<string, CursorPosition>>({});
   const [connected, setConnected] = useState(false);
   const [lastSeenSequence, setLastSeenSequence] = useState(lastSeenSequenceNumber.current);
+  const [permissionError, setPermissionError] = useState<string | null>(null);
+  const clearPermissionError = useCallback(() => setPermissionError(null), []);
 
   const markSequenceSeen = useCallback(
     (sequenceNumber: number) => {
@@ -91,6 +93,8 @@ export function useRoomCollaboration(roomId: string) {
     });
     socket.on('disconnect', () => setConnected(false));
     socket.on('room:participants', setParticipants);
+    socket.on('permission:error', (payload: { message: string }) => setPermissionError(payload.message));
+    socket.on('room:error', (payload: { message: string }) => setPermissionError(payload.message));
     socket.on('board:full-sync', (payload: FullSyncPayload) => {
       setInitialBoard(payload.board);
       markSequenceSeen(payload.lastSequenceNumber);
@@ -163,10 +167,13 @@ export function useRoomCollaboration(roomId: string) {
     userId: identity.userId,
     userName: identity.name,
     participants,
+    currentRole: participants.find((participant) => participant.userId === identity.userId)?.role ?? identity.role,
     initialBoard,
     remoteOperation,
     remoteCursors: Object.values(remoteCursors),
     lastSeenSequence,
+    permissionError,
+    clearPermissionError,
     emitOperation,
     emitCursor,
   };

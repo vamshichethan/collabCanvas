@@ -1,4 +1,4 @@
-import type { Prisma, PrismaClient } from '@prisma/client';
+import type { ParticipantRole, Prisma, PrismaClient, RoomVisibility } from '@prisma/client';
 import type { BoardOperation, ClientOperation, WhiteboardObject } from './types.js';
 
 const SNAPSHOT_INTERVAL = 25;
@@ -67,10 +67,79 @@ export class PersistenceManager {
     await this.ensureUser(userId, name);
     await this.ensureRoomAndBoard(roomId, userId, name);
 
-    await this.prisma.participant.upsert({
+    return this.prisma.participant.upsert({
+      where: { roomId_userId: { roomId, userId } },
+      update: {},
+      create: { roomId, userId, role },
+      include: { user: true },
+    });
+  }
+
+  async inviteParticipant(roomId: string, userId: string, name: string, role: ParticipantRole) {
+    await this.ensureUser(userId, name);
+    return this.prisma.participant.upsert({
       where: { roomId_userId: { roomId, userId } },
       update: { role },
       create: { roomId, userId, role },
+      include: { user: true },
+    });
+  }
+
+  async removeParticipant(roomId: string, userId: string) {
+    return this.prisma.participant.delete({
+      where: { roomId_userId: { roomId, userId } },
+    });
+  }
+
+  async updateParticipantRole(roomId: string, userId: string, role: ParticipantRole) {
+    return this.prisma.participant.update({
+      where: { roomId_userId: { roomId, userId } },
+      data: { role },
+      include: { user: true },
+    });
+  }
+
+  async transferOwnership(roomId: string, ownerId: string, nextOwnerId: string) {
+    return this.prisma.$transaction(async (tx) => {
+      await tx.room.update({ where: { id: roomId }, data: { ownerId: nextOwnerId } });
+      await tx.participant.update({
+        where: { roomId_userId: { roomId, userId: ownerId } },
+        data: { role: 'EDITOR' },
+      });
+      return tx.participant.update({
+        where: { roomId_userId: { roomId, userId: nextOwnerId } },
+        data: { role: 'OWNER' },
+        include: { user: true },
+      });
+    });
+  }
+
+  async updateRoomSettings(
+    roomId: string,
+    settings: { visibility?: RoomVisibility; allowViewerComments?: boolean; lockBoardEditing?: boolean },
+  ) {
+    return this.prisma.room.update({
+      where: { id: roomId },
+      data: settings,
+    });
+  }
+
+  async regenerateInviteCode(roomId: string) {
+    return this.prisma.room.update({
+      where: { id: roomId },
+      data: { inviteCode: this.createRoomId() },
+    });
+  }
+
+  async createComment(boardId: string, userId: string, message: string, objectId?: string) {
+    return this.prisma.comment.create({
+      data: { boardId, userId, message, objectId },
+    });
+  }
+
+  async createChatMessage(roomId: string, userId: string, message: string) {
+    return this.prisma.chatMessage.create({
+      data: { roomId, userId, message },
     });
   }
 
@@ -80,6 +149,11 @@ export class PersistenceManager {
       board: this.toWhiteboardObjects(board?.currentState),
       lastSequenceNumber: board?.lastSequenceNumber ?? 0,
     };
+  }
+
+  async getBoardRoomId(boardId: string) {
+    const board = await this.prisma.board.findUnique({ where: { id: boardId }, select: { roomId: true } });
+    return board?.roomId ?? null;
   }
 
   async getRoom(roomId: string) {

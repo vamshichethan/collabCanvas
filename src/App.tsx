@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import CanvasBoard from './components/CanvasBoard';
+import ParticipantPanel from './components/ParticipantPanel';
+import RoomSettingsPanel from './components/RoomSettingsPanel';
 import Toolbar from './components/Toolbar';
 import VersionHistoryPanel from './components/VersionHistoryPanel';
 import { getOrCreateIdentity, useRoomCollaboration } from './hooks/useRoomCollaboration';
@@ -127,8 +129,34 @@ function RoomPage({ roomId }: { roomId: string }) {
   });
   const [copied, setCopied] = useState(false);
   const [restoredBoard, setRestoredBoard] = useState<WhiteboardObject[] | null>(null);
+  const [room, setRoom] = useState<DashboardRoom | null>(null);
+  const [toast, setToast] = useState<string | null>(null);
   const inviteLink = useMemo(() => `${window.location.origin}/room/${roomId}`, [roomId]);
   const collaboration = useRoomCollaboration(roomId);
+  const currentDbParticipant = room?.participants.find((participant) => participant.userId === collaboration.userId);
+  const currentRole = currentDbParticipant?.role ?? roleToDb(collaboration.currentRole);
+  const isOwner = currentRole === 'OWNER';
+  const isViewer = currentRole === 'VIEWER';
+  const boardLocked = Boolean(room?.lockBoardEditing && !isOwner);
+  const readOnly = isViewer || boardLocked;
+
+  const loadRoom = async () => {
+    try {
+      setRoom(await api.getRoom(roomId));
+    } catch {
+      setToast('Unable to load room details');
+    }
+  };
+
+  useEffect(() => {
+    void loadRoom();
+  }, [roomId]);
+
+  useEffect(() => {
+    if (!collaboration.permissionError) return;
+    setToast(collaboration.permissionError);
+    collaboration.clearPermissionError();
+  }, [collaboration.permissionError, collaboration.clearPermissionError]);
 
   const copyInviteLink = async () => {
     await navigator.clipboard.writeText(inviteLink);
@@ -139,6 +167,40 @@ function RoomPage({ roomId }: { roomId: string }) {
   const handleRestore = (objects: WhiteboardObject[], lastSequenceNumber: number) => {
     setRestoredBoard(objects);
     localStorage.setItem(`collabcanvas:${roomId}:lastSequence`, String(lastSequenceNumber));
+  };
+
+  const updateRole = async (userId: string, role: 'OWNER' | 'EDITOR' | 'VIEWER') => {
+    try {
+      await api.updateParticipantRole(roomId, collaboration.userId, userId, role);
+      await loadRoom();
+    } catch {
+      setToast('Only owners can change roles');
+    }
+  };
+
+  const removeParticipant = async (userId: string) => {
+    try {
+      await api.removeParticipant(roomId, collaboration.userId, userId);
+      await loadRoom();
+    } catch {
+      setToast('Only owners can remove participants');
+    }
+  };
+
+  const updateSettings = async (settings: { visibility?: 'PUBLIC' | 'PRIVATE'; allowViewerComments?: boolean; lockBoardEditing?: boolean }) => {
+    try {
+      setRoom(await api.updateRoomSettings(roomId, collaboration.userId, settings));
+    } catch {
+      setToast('Only owners can update room settings');
+    }
+  };
+
+  const regenerateInvite = async () => {
+    try {
+      setRoom(await api.regenerateInvite(roomId, collaboration.userId));
+    } catch {
+      setToast('Only owners can regenerate invite links');
+    }
   };
 
   return (
@@ -171,7 +233,21 @@ function RoomPage({ roomId }: { roomId: string }) {
       </header>
 
       <div className="mx-auto flex w-full max-w-7xl flex-1 flex-col gap-4 px-3 py-4 md:px-6">
-        <VersionHistoryPanel boardId={roomId} userId={collaboration.userId} onRestore={handleRestore} />
+        {toast ? (
+          <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm font-semibold text-red-700">
+            {toast}
+          </div>
+        ) : null}
+        <RoomSettingsPanel room={room} isOwner={isOwner} onChange={updateSettings} onRegenerateInvite={regenerateInvite} />
+        <ParticipantPanel room={room} currentUserId={collaboration.userId} onRoleChange={updateRole} onRemove={removeParticipant} />
+        <VersionHistoryPanel
+          boardId={roomId}
+          userId={collaboration.userId}
+          canCreate={currentRole === 'OWNER' || currentRole === 'EDITOR'}
+          canRestore={isOwner}
+          onRestore={handleRestore}
+          onError={setToast}
+        />
         <CanvasBoard
           activeTool={activeTool}
           settings={settings}
@@ -183,10 +259,12 @@ function RoomPage({ roomId }: { roomId: string }) {
           remoteCursors={collaboration.remoteCursors}
           onLocalOperation={collaboration.emitOperation}
           onCursorMove={collaboration.emitCursor}
+          readOnly={readOnly}
           toolbar={
             <Toolbar
               activeTool={activeTool}
               settings={settings}
+              disabled={readOnly}
               onToolChange={setActiveTool}
               onSettingsChange={setSettings}
             />
@@ -198,3 +276,9 @@ function RoomPage({ roomId }: { roomId: string }) {
 }
 
 export default App;
+
+const roleToDb = (role: 'owner' | 'editor' | 'viewer') => {
+  if (role === 'owner') return 'OWNER';
+  if (role === 'viewer') return 'VIEWER';
+  return 'EDITOR';
+};

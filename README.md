@@ -77,9 +77,12 @@ backend/
     apiRoutes.ts
     operationManager.ts
     persistenceManager.ts
+    permissionMiddleware.ts
     permissionManager.ts
     prisma.ts
+    roleGuards.ts
     roomManager.ts
+    roomSettingsService.ts
     server.ts
     socketHandlers.ts
     types.ts
@@ -191,6 +194,12 @@ Use Neon PostgreSQL or Supabase PostgreSQL by putting the connection string in `
 - `POST /api/rooms` creates a persisted room, board, owner participant, and invite code.
 - `GET /api/rooms/:roomId` returns room details, boards, and participants.
 - `POST /api/rooms/:roomId/join` persists participant membership.
+- `PATCH /api/rooms/:roomId/settings` updates public/private, viewer comments, and board lock settings.
+- `POST /api/rooms/:roomId/regenerate-invite` regenerates the invite code.
+- `POST /api/rooms/:roomId/participants` invites a participant.
+- `PATCH /api/rooms/:roomId/participants/:userId` changes a participant role.
+- `DELETE /api/rooms/:roomId/participants/:userId` removes a participant.
+- `POST /api/rooms/:roomId/transfer-owner` transfers ownership.
 - `GET /api/boards/:boardId` returns the persisted board state and latest sequence.
 - `GET /api/boards/:boardId/versions` lists named versions.
 - `POST /api/boards/:boardId/versions` creates a named version from the current board state.
@@ -200,3 +209,13 @@ Use Neon PostgreSQL or Supabase PostgreSQL by putting the connection string in `
 ## Snapshots And Versions
 
 Autosave snapshots are created every 25 accepted drawing operations. Each snapshot stores the full board state, sequence number, creation time, and creator. Named versions are user-created snapshots with a display name. Restoring a version updates `Board.currentState`, advances the board sequence, and creates a restore snapshot.
+
+## Role-Based Permissions
+
+Permissions are centralized in `backend/src/permissionManager.ts`, `backend/src/roleGuards.ts`, and `backend/src/permissionMiddleware.ts`. The backend never trusts the frontend role; every REST mutation and Socket.IO drawing operation checks the persisted `Participant.role` in PostgreSQL.
+
+- `OWNER`: can draw, edit, delete, comment, invite, change roles, update room settings, create/restore versions, and transfer ownership.
+- `EDITOR`: can draw, edit objects, delete own objects, comment, and create versions.
+- `VIEWER`: can view the board, move cursors, read chat, and comment only when `allowViewerComments` is enabled.
+
+Viewer mode is enforced twice: the frontend disables drawing controls and passes `readOnly` into the board, while the backend still rejects viewer drawing operations through `operation:submit`. Editors are also blocked from role changes, room settings changes, and version restores. If `lockBoardEditing` is enabled, only owners can keep editing.

@@ -5,10 +5,13 @@ import type { BoardVersionRecord, WhiteboardObject } from '../types';
 type VersionHistoryPanelProps = {
   boardId: string;
   userId: string;
+  canCreate: boolean;
+  canRestore: boolean;
   onRestore: (objects: WhiteboardObject[], lastSequenceNumber: number) => void;
+  onError: (message: string) => void;
 };
 
-function VersionHistoryPanel({ boardId, userId, onRestore }: VersionHistoryPanelProps) {
+function VersionHistoryPanel({ boardId, userId, canCreate, canRestore, onRestore, onError }: VersionHistoryPanelProps) {
   const [versions, setVersions] = useState<BoardVersionRecord[]>([]);
   const [name, setName] = useState('');
   const [loading, setLoading] = useState(false);
@@ -26,7 +29,13 @@ function VersionHistoryPanel({ boardId, userId, onRestore }: VersionHistoryPanel
     if (!trimmed) return;
 
     setLoading(true);
-    await api.createVersion(boardId, trimmed, userId);
+    try {
+      await api.createVersion(boardId, trimmed, userId);
+    } catch {
+      onError('You do not have permission to create versions');
+      setLoading(false);
+      return;
+    }
     setName('');
     await loadVersions();
     setLoading(false);
@@ -34,7 +43,14 @@ function VersionHistoryPanel({ boardId, userId, onRestore }: VersionHistoryPanel
 
   const restoreVersion = async (versionId: string) => {
     setLoading(true);
-    const restored = await api.restoreVersion(boardId, versionId, userId);
+    let restored: Awaited<ReturnType<typeof api.restoreVersion>>;
+    try {
+      restored = await api.restoreVersion(boardId, versionId, userId);
+    } catch {
+      onError('Only owners can restore versions');
+      setLoading(false);
+      return;
+    }
     onRestore(restored.board, restored.lastSequenceNumber);
     await loadVersions();
     setLoading(false);
@@ -52,7 +68,7 @@ function VersionHistoryPanel({ boardId, userId, onRestore }: VersionHistoryPanel
         <button
           type="button"
           onClick={createVersion}
-          disabled={loading || !name.trim()}
+          disabled={loading || !name.trim() || !canCreate}
           className="rounded-lg bg-slate-950 px-3 py-2 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
         >
           Create version
@@ -73,7 +89,7 @@ function VersionHistoryPanel({ boardId, userId, onRestore }: VersionHistoryPanel
                 <button
                   type="button"
                   onClick={() => restoreVersion(version.id)}
-                  disabled={loading}
+                  disabled={loading || !canRestore}
                   className="rounded-md border border-slate-200 px-2 py-1 text-xs font-semibold text-slate-700 transition hover:bg-slate-50"
                 >
                   Restore

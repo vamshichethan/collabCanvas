@@ -93,6 +93,8 @@ export type DashboardRoom = {
   name: string;
   inviteCode: string;
   visibility: 'PUBLIC' | 'PRIVATE';
+  allowViewerComments: boolean;
+  lockBoardEditing: boolean;
   ownerId: string;
   boards: Array<{
     id: string;
@@ -104,6 +106,11 @@ export type DashboardRoom = {
     id: string;
     userId: string;
     role: 'OWNER' | 'EDITOR' | 'VIEWER';
+    user?: {
+      id: string;
+      name: string;
+      email?: string | null;
+    };
   }>;
   updatedAt: string;
 };

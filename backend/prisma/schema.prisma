@@ -42,18 +42,20 @@ model User {
 }
 
 model Room {
-  id           String             @id
-  name         String
-  inviteCode   String             @unique
-  visibility   RoomVisibility     @default(PRIVATE)
-  ownerId      String
-  owner        User               @relation("RoomOwner", fields: [ownerId], references: [id])
-  boards       Board[]
-  participants Participant[]
-  operations   DrawingOperation[]
-  chatMessages ChatMessage[]
-  createdAt    DateTime           @default(now())
-  updatedAt    DateTime           @updatedAt
+  id                  String             @id
+  name                String
+  inviteCode          String             @unique
+  visibility          RoomVisibility     @default(PRIVATE)
+  allowViewerComments Boolean            @default(false)
+  lockBoardEditing    Boolean            @default(false)
+  ownerId             String
+  owner               User               @relation("RoomOwner", fields: [ownerId], references: [id])
+  boards              Board[]
+  participants        Participant[]
+  operations          DrawingOperation[]
+  chatMessages        ChatMessage[]
+  createdAt           DateTime           @default(now())
+  updatedAt           DateTime           @updatedAt
 
   @@index([ownerId])
   @@index([inviteCode])

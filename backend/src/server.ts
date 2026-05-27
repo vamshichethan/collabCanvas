@@ -27,7 +27,7 @@ app.get('/health', (_request, response) => {
   response.json({ ok: true });
 });
 
-app.use('/api', createApiRoutes(persistence, operations));
+app.use('/api', createApiRoutes(persistence, operations, permissions));
 
 app.use((error: unknown, _request: express.Request, response: express.Response, _next: express.NextFunction) => {
   console.error(error);

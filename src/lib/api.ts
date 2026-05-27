@@ -18,6 +18,37 @@ export const api = {
     return request<DashboardRoom>(`/api/rooms/${encodeURIComponent(roomId)}`);
   },
 
+  async updateRoomSettings(
+    roomId: string,
+    userId: string,
+    settings: { visibility?: 'PUBLIC' | 'PRIVATE'; allowViewerComments?: boolean; lockBoardEditing?: boolean },
+  ) {
+    return request<DashboardRoom>(`/api/rooms/${encodeURIComponent(roomId)}/settings`, {
+      method: 'PATCH',
+      body: JSON.stringify({ userId, settings }),
+    });
+  },
+
+  async regenerateInvite(roomId: string, userId: string) {
+    return request<DashboardRoom>(`/api/rooms/${encodeURIComponent(roomId)}/regenerate-invite`, {
+      method: 'POST',
+      body: JSON.stringify({ userId }),
+    });
+  },
+
+  async updateParticipantRole(roomId: string, actorId: string, userId: string, role: 'OWNER' | 'EDITOR' | 'VIEWER') {
+    return request(`/api/rooms/${encodeURIComponent(roomId)}/participants/${encodeURIComponent(userId)}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ actorId, role }),
+    });
+  },
+
+  async removeParticipant(roomId: string, actorId: string, userId: string) {
+    return request(`/api/rooms/${encodeURIComponent(roomId)}/participants/${encodeURIComponent(userId)}?actorId=${encodeURIComponent(actorId)}`, {
+      method: 'DELETE',
+    });
+  },
+
   async getVersions(boardId: string) {
     return request<BoardVersionRecord[]>(`/api/boards/${encodeURIComponent(boardId)}/versions`);
   },
