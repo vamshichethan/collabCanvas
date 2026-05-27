@@ -88,6 +88,15 @@ export class PermissionManager {
     return canRole(participant.role, 'GENERATE_AI_SUMMARY') ? null : 'permission denied: GENERATE_AI_SUMMARY';
   }
 
+  async canExportBoard(roomId: string, userId: string) {
+    const participant = await this.getParticipant(roomId, userId);
+    if (!participant) return 'user is not a room participant';
+    if (participant.role === 'VIEWER') {
+      return participant.room.allowViewerExports ? null : 'viewer exports are disabled';
+    }
+    return canRole(participant.role, 'EXPORT_BOARD') ? null : 'permission denied: EXPORT_BOARD';
+  }
+
   async canUpdateSettings(roomId: string, userId: string) {
     return this.requireAction(roomId, userId, 'UPDATE_ROOM_SETTINGS');
   }

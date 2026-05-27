@@ -1,11 +1,14 @@
 import type {
   ActivityItem,
   AISummaryRecord,
+  BoardExportRecord,
+  BoardJsonExport,
   BoardVersionRecord,
   ChatMessage,
   DashboardRoom,
   ObjectComment,
   SummaryType,
+  ExportType,
   WhiteboardObject,
 } from '../types';
 
@@ -38,7 +41,13 @@ export const api = {
   async updateRoomSettings(
     roomId: string,
     userId: string,
-    settings: { visibility?: 'PUBLIC' | 'PRIVATE'; allowViewerComments?: boolean; allowViewerAISummaries?: boolean; lockBoardEditing?: boolean },
+    settings: {
+      visibility?: 'PUBLIC' | 'PRIVATE';
+      allowViewerComments?: boolean;
+      allowViewerAISummaries?: boolean;
+      allowViewerExports?: boolean;
+      lockBoardEditing?: boolean;
+    },
   ) {
     return request<DashboardRoom>(`/api/rooms/${encodeURIComponent(roomId)}/settings`, {
       method: 'PATCH',
@@ -82,6 +91,27 @@ export const api = {
     return request<AISummaryRecord>(`/api/boards/${encodeURIComponent(boardId)}/ai-summary`, {
       method: 'POST',
       body: JSON.stringify({ userId, summaryType }),
+    });
+  },
+
+  async exportBoardJson(
+    boardId: string,
+    userId: string,
+    options: { includeComments: boolean; includeAISummaries: boolean; includeDeleted: boolean },
+  ) {
+    const params = new URLSearchParams({
+      userId,
+      includeComments: String(options.includeComments),
+      includeAISummaries: String(options.includeAISummaries),
+      includeDeleted: String(options.includeDeleted),
+    });
+    return request<BoardJsonExport>(`/api/boards/${encodeURIComponent(boardId)}/export/json?${params.toString()}`);
+  },
+
+  async recordBoardExport(boardId: string, userId: string, exportType: ExportType) {
+    return request<BoardExportRecord>(`/api/boards/${encodeURIComponent(boardId)}/export/record`, {
+      method: 'POST',
+      body: JSON.stringify({ userId, exportType }),
     });
   },
 

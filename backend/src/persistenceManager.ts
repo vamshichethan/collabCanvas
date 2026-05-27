@@ -116,7 +116,13 @@ export class PersistenceManager {
 
   async updateRoomSettings(
     roomId: string,
-    settings: { visibility?: RoomVisibility; allowViewerComments?: boolean; allowViewerAISummaries?: boolean; lockBoardEditing?: boolean },
+    settings: {
+      visibility?: RoomVisibility;
+      allowViewerComments?: boolean;
+      allowViewerAISummaries?: boolean;
+      allowViewerExports?: boolean;
+      lockBoardEditing?: boolean;
+    },
   ) {
     return this.prisma.room.update({
       where: { id: roomId },

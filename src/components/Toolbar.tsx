@@ -9,6 +9,7 @@ import {
   TextCursorInput,
   Trash2,
   Undo2,
+  Download,
 } from 'lucide-react';
 import ToolButton from './ToolButton';
 import type { DrawingSettings, Tool, ToolDefinition } from '../types';
@@ -34,6 +35,7 @@ type ToolbarProps = {
   onUndo?: () => void;
   onRedo?: () => void;
   onClear?: () => void;
+  onExport?: () => void;
 };
 
 function Toolbar({
@@ -46,6 +48,7 @@ function Toolbar({
   onUndo,
   onRedo,
   onClear,
+  onExport,
   disabled = false,
 }: ToolbarProps) {
   return (
@@ -97,6 +100,7 @@ function Toolbar({
         <ToolButton icon={Undo2} label="Undo" disabled={!canUndo} onClick={() => onUndo?.()} />
         <ToolButton icon={Redo2} label="Redo" disabled={!canRedo} onClick={() => onRedo?.()} />
         <ToolButton icon={Trash2} label="Clear canvas" disabled={disabled} onClick={() => onClear?.()} />
+        <ToolButton icon={Download} label="Export" onClick={() => onExport?.()} />
       </div>
     </aside>
   );

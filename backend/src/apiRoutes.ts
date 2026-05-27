@@ -3,6 +3,7 @@ import type { ActivityService } from './activityService.js';
 import { isSummaryType, type AISummaryService } from './aiSummaryService.js';
 import type { ChatService } from './chatService.js';
 import type { CommentService } from './commentService.js';
+import { isExportType, type ExportService } from './exportService.js';
 import { OperationManager } from './operationManager.js';
 import { requireRoomAction } from './permissionMiddleware.js';
 import { normalizeRole, PermissionManager } from './permissionManager.js';
@@ -12,7 +13,13 @@ export const createApiRoutes = (
   persistence: PersistenceManager,
   operations: OperationManager,
   permissions: PermissionManager,
-  services: { chat: ChatService; comments: CommentService; activity: ActivityService; aiSummaries: AISummaryService },
+  services: {
+    chat: ChatService;
+    comments: CommentService;
+    activity: ActivityService;
+    aiSummaries: AISummaryService;
+    exports: ExportService;
+  },
 ) => {
   const router = Router();
 
@@ -238,6 +245,52 @@ export const createApiRoutes = (
         response.status(502).json({ error: message });
         return;
       }
+      next(error);
+    }
+  });
+
+  router.get('/boards/:boardId/export/json', async (request, response, next) => {
+    try {
+      const roomId = await persistence.getBoardRoomId(request.params.boardId);
+      const userId = String(request.query.userId ?? '');
+      const reason = roomId ? await permissions.canExportBoard(roomId, userId) : 'board not found';
+      if (reason) {
+        response.status(403).json({ error: reason });
+        return;
+      }
+
+      response.json(
+        await services.exports.getJsonExport(request.params.boardId, {
+          includeComments: request.query.includeComments === 'true',
+          includeAISummaries: request.query.includeAISummaries === 'true',
+          includeDeleted: request.query.includeDeleted === 'true',
+        }),
+      );
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post('/boards/:boardId/export/record', async (request, response, next) => {
+    try {
+      const roomId = await persistence.getBoardRoomId(request.params.boardId);
+      const userId = String(request.body?.userId ?? request.body?.exportedBy ?? '');
+      const exportType = request.body?.exportType;
+      if (!isExportType(exportType)) {
+        response.status(400).json({ error: 'exportType is invalid' });
+        return;
+      }
+
+      const reason = roomId ? await permissions.canExportBoard(roomId, userId) : 'board not found';
+      if (reason) {
+        response.status(403).json({ error: reason });
+        return;
+      }
+
+      const record = await services.exports.recordExport(request.params.boardId, userId, exportType);
+      await services.activity.create(record.roomId, 'BOARD_EXPORT', `${record.exportedByName} exported board as ${exportType}`, userId);
+      response.status(201).json(record);
+    } catch (error) {
       next(error);
     }
   });

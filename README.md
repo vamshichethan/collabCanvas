@@ -84,6 +84,7 @@ backend/
     aiSummaryService.ts
     chatService.ts
     commentService.ts
+    exportService.ts
     messageUtils.ts
     operationManager.ts
     persistenceManager.ts
@@ -200,6 +201,7 @@ Prisma models live in `backend/prisma/schema.prisma`:
 - `ChatMessage`
 - `ActivityLog`
 - `AISummary`
+- `BoardExport`
 
 Use Neon PostgreSQL or Supabase PostgreSQL by putting the connection string in `backend/.env` as `DATABASE_URL`.
 
@@ -208,7 +210,7 @@ Use Neon PostgreSQL or Supabase PostgreSQL by putting the connection string in `
 - `POST /api/rooms` creates a persisted room, board, owner participant, and invite code.
 - `GET /api/rooms/:roomId` returns room details, boards, and participants.
 - `POST /api/rooms/:roomId/join` persists participant membership.
-- `PATCH /api/rooms/:roomId/settings` updates public/private, viewer comments, viewer AI summaries, and board lock settings.
+- `PATCH /api/rooms/:roomId/settings` updates public/private, viewer comments, viewer AI summaries, viewer exports, and board lock settings.
 - `POST /api/rooms/:roomId/regenerate-invite` regenerates the invite code.
 - `POST /api/rooms/:roomId/participants` invites a participant.
 - `PATCH /api/rooms/:roomId/participants/:userId` changes a participant role.
@@ -224,6 +226,8 @@ Use Neon PostgreSQL or Supabase PostgreSQL by putting the connection string in `
 - `GET /api/rooms/:roomId/activity` loads the room activity feed.
 - `GET /api/boards/:boardId/ai-summaries` loads saved AI summaries.
 - `POST /api/boards/:boardId/ai-summary` generates and saves an AI summary.
+- `GET /api/boards/:boardId/export/json` returns source-of-truth structured board export JSON.
+- `POST /api/boards/:boardId/export/record` records PNG, PDF, or JSON export activity.
 
 ## Snapshots And Versions
 
@@ -233,8 +237,8 @@ Autosave snapshots are created every 25 accepted drawing operations. Each snapsh
 
 Permissions are centralized in `backend/src/permissionManager.ts`, `backend/src/roleGuards.ts`, and `backend/src/permissionMiddleware.ts`. The backend never trusts the frontend role; every REST mutation and Socket.IO drawing operation checks the persisted `Participant.role` in PostgreSQL.
 
-- `OWNER`: can draw, edit, delete, comment, invite, change roles, update room settings, create/restore versions, generate AI summaries, and transfer ownership.
-- `EDITOR`: can draw, edit objects, delete own objects, comment, create versions, and generate AI summaries.
+- `OWNER`: can draw, edit, delete, comment, invite, change roles, update room settings, create/restore versions, generate AI summaries, export, and transfer ownership.
+- `EDITOR`: can draw, edit objects, delete own objects, comment, create versions, generate AI summaries, and export.
 - `VIEWER`: can view the board, move cursors, read chat, and comment only when `allowViewerComments` is enabled.
 
 Viewer mode is enforced twice: the frontend disables drawing controls and passes `readOnly` into the board, while the backend still rejects viewer drawing operations through `operation:submit`. Editors are also blocked from role changes, room settings changes, and version restores. If `lockBoardEditing` is enabled, only owners can keep editing.
@@ -275,3 +279,11 @@ The AI context is intentionally compact. It includes the board title, latest ver
 Generated summaries are stored in `AISummary` with `boardId`, `roomId`, `generatedBy`, `summaryType`, JSON summary content, and `createdAt`. The right sidebar has an AI tab for choosing `MEETING_NOTES`, `ACTION_ITEMS`, `CLASS_NOTES`, or `MIND_MAP`, generating a summary, copying it, and viewing saved summaries.
 
 Owners and editors can generate summaries. Viewers can read saved summaries, and can generate only when `allowViewerAISummaries` is enabled for the room. Empty boards, Gemini failures, invalid JSON, missing API keys, and rate limits return clear API errors instead of failing silently.
+
+## Exports
+
+The toolbar Export button opens a modal with PNG, PDF, and JSON options. PNG and PDF are generated on the frontend from the current Fabric canvas. PNG uses `canvas.toDataURL()` at a high multiplier and supports transparent or white background. PDF uses `jsPDF`, places the board title and export timestamp on an A4 landscape page, and fits the canvas image while preserving aspect ratio.
+
+JSON exports come from `GET /api/boards/:boardId/export/json` because PostgreSQL is the source of truth. The payload includes `boardId`, `roomId`, title, export timestamp, latest sequence number, active objects by default, versions, and optional comments, AI summaries, and deleted/history objects. Each successful export calls `POST /api/boards/:boardId/export/record`, stores a `BoardExport` row, and creates an activity log such as `Vamshi exported board as PDF`.
+
+Owners and editors can export. Viewers can export only when `allowViewerExports` is enabled for the room.

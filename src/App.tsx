@@ -147,6 +147,8 @@ function RoomPage({ roomId }: { roomId: string }) {
   const canSendChat = currentRole === 'OWNER' || currentRole === 'EDITOR' || Boolean(room?.allowViewerComments);
   const canComment = canSendChat;
   const canGenerateAISummary = currentRole === 'OWNER' || currentRole === 'EDITOR' || Boolean(room?.allowViewerAISummaries);
+  const canExport = currentRole === 'OWNER' || currentRole === 'EDITOR' || Boolean(room?.allowViewerExports);
+  const boardTitle = room?.boards[0]?.title ?? 'CollabCanvas Board';
 
   const loadRoom = async () => {
     try {
@@ -216,6 +218,7 @@ function RoomPage({ roomId }: { roomId: string }) {
     visibility?: 'PUBLIC' | 'PRIVATE';
     allowViewerComments?: boolean;
     allowViewerAISummaries?: boolean;
+    allowViewerExports?: boolean;
     lockBoardEditing?: boolean;
   }) => {
     try {
@@ -246,6 +249,22 @@ function RoomPage({ roomId }: { roomId: string }) {
     } finally {
       setAiSummaryLoading(false);
     }
+  };
+
+  const exportJson = (options: {
+    includeComments: boolean;
+    includeAISummaries: boolean;
+    includeDeleted: boolean;
+    transparentBackground: boolean;
+  }) =>
+    api.exportBoardJson(roomId, collaboration.userId, {
+      includeComments: options.includeComments,
+      includeAISummaries: options.includeAISummaries,
+      includeDeleted: options.includeDeleted,
+    });
+
+  const recordExport = async (exportType: 'PNG' | 'PDF' | 'JSON') => {
+    await api.recordBoardExport(roomId, collaboration.userId, exportType);
   };
 
   return (
@@ -304,9 +323,14 @@ function RoomPage({ roomId }: { roomId: string }) {
             remoteOperation={collaboration.remoteOperation}
             remoteCursors={collaboration.remoteCursors}
             comments={collaboration.comments}
+            boardTitle={boardTitle}
+            canExport={canExport}
             onLocalOperation={collaboration.emitOperation}
             onCursorMove={collaboration.emitCursor}
             onSelectedObjectChange={setSelectedObjectId}
+            onJsonExport={exportJson}
+            onRecordExport={recordExport}
+            onExportError={setToast}
             readOnly={readOnly}
             toolbar={
               <Toolbar

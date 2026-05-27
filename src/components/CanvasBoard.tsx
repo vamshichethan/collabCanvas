@@ -8,6 +8,7 @@ import {
   useRef,
   useState,
 } from 'react';
+import { jsPDF } from 'jspdf';
 import {
   Canvas,
   Circle,
@@ -33,6 +34,8 @@ import type {
   CursorPosition,
   DrawingSettings,
   ObjectComment,
+  BoardJsonExport,
+  ExportType,
   Tool,
   WhiteboardObject,
 } from '../types';
@@ -52,6 +55,11 @@ type CanvasBoardProps = {
   readOnly?: boolean;
   comments?: ObjectComment[];
   onSelectedObjectChange?: (objectId: string | null) => void;
+  boardTitle?: string;
+  canExport?: boolean;
+  onJsonExport?: (options: ExportOptions) => Promise<BoardJsonExport>;
+  onRecordExport?: (exportType: ExportType) => Promise<void>;
+  onExportError?: (message: string) => void;
 };
 
 type ToolbarHistoryProps = {
@@ -60,6 +68,14 @@ type ToolbarHistoryProps = {
   onUndo: () => void;
   onRedo: () => void;
   onClear: () => void;
+  onExport: () => void;
+};
+
+type ExportOptions = {
+  includeComments: boolean;
+  includeAISummaries: boolean;
+  includeDeleted: boolean;
+  transparentBackground: boolean;
 };
 
 function CanvasBoard({
@@ -77,6 +93,11 @@ function CanvasBoard({
   readOnly = false,
   comments = [],
   onSelectedObjectChange,
+  boardTitle = 'CollabCanvas Board',
+  canExport = true,
+  onJsonExport,
+  onRecordExport,
+  onExportError,
 }: CanvasBoardProps) {
   const canvasElementRef = useRef<HTMLCanvasElement | null>(null);
   const shellRef = useRef<HTMLDivElement | null>(null);
@@ -90,6 +111,14 @@ function CanvasBoard({
   const renderingFromStateRef = useRef(false);
   const [objects, setObjects] = useState<WhiteboardObject[]>([]);
   const [showDebugPanel, setShowDebugPanel] = useState(false);
+  const [showExportModal, setShowExportModal] = useState(false);
+  const [exporting, setExporting] = useState<ExportType | null>(null);
+  const [exportOptions, setExportOptions] = useState<ExportOptions>({
+    includeComments: true,
+    includeAISummaries: true,
+    includeDeleted: false,
+    transparentBackground: false,
+  });
   const { canUndo, canRedo, initializeHistory, saveHistory, undo, redo } = useCanvasHistory();
 
   const emitOperations = useCallback(
@@ -505,6 +534,87 @@ function CanvasBoard({
     commitObjects([], { render: true });
   }, [commitObjects, readOnly]);
 
+  const exportCanvasImage = useCallback(
+    (transparentBackground: boolean) => {
+      const canvas = canvasRef.current;
+      if (!canvas) throw new Error('Canvas is not ready');
+
+      const previousBackground = canvas.backgroundColor;
+      canvas.backgroundColor = transparentBackground ? 'rgba(255,255,255,0)' : '#ffffff';
+      canvas.requestRenderAll();
+      const dataUrl = canvas.toDataURL({
+        format: 'png',
+        multiplier: 2,
+        enableRetinaScaling: true,
+      });
+      canvas.backgroundColor = previousBackground;
+      canvas.requestRenderAll();
+      return dataUrl;
+    },
+    [],
+  );
+
+  const downloadFile = useCallback((href: string, filename: string) => {
+    const link = document.createElement('a');
+    link.href = href;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+  }, []);
+
+  const handleExport = useCallback(
+    async (exportType: ExportType) => {
+      if (!canExport) {
+        onExportError?.('You do not have permission to export this board');
+        return;
+      }
+
+      setExporting(exportType);
+      try {
+        const filenameBase = slugify(boardTitle || 'collabcanvas-board');
+        if (exportType === 'PNG') {
+          downloadFile(exportCanvasImage(exportOptions.transparentBackground), `${filenameBase}.png`);
+        } else if (exportType === 'PDF') {
+          const image = exportCanvasImage(false);
+          const pdf = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
+          const pageWidth = pdf.internal.pageSize.getWidth();
+          const pageHeight = pdf.internal.pageSize.getHeight();
+          const title = boardTitle || 'CollabCanvas Board';
+          const timestamp = new Date().toLocaleString();
+          pdf.setFontSize(14);
+          pdf.text(title, 12, 12);
+          pdf.setFontSize(9);
+          pdf.text(`Exported ${timestamp}`, 12, 18);
+
+          const imageProps = pdf.getImageProperties(image);
+          const maxWidth = pageWidth - 24;
+          const maxHeight = pageHeight - 30;
+          const scale = Math.min(maxWidth / imageProps.width, maxHeight / imageProps.height);
+          const width = imageProps.width * scale;
+          const height = imageProps.height * scale;
+          pdf.addImage(image, 'PNG', (pageWidth - width) / 2, 24, width, height);
+          pdf.save(`${filenameBase}.pdf`);
+        } else {
+          if (!onJsonExport) throw new Error('JSON export is not available');
+          const data = await onJsonExport(exportOptions);
+          const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+          const url = URL.createObjectURL(blob);
+          downloadFile(url, `${filenameBase}.json`);
+          URL.revokeObjectURL(url);
+        }
+
+        await onRecordExport?.(exportType);
+        setShowExportModal(false);
+      } catch (error) {
+        onExportError?.(error instanceof Error ? error.message : 'Export failed');
+      } finally {
+        setExporting(null);
+      }
+    },
+    [boardTitle, canExport, downloadFile, exportCanvasImage, exportOptions, onExportError, onJsonExport, onRecordExport],
+  );
+
   const enhancedToolbar = isValidElement(toolbar)
     ? cloneElement(toolbar as ReactElement<Partial<ToolbarHistoryProps>>, {
         canUndo,
@@ -512,6 +622,7 @@ function CanvasBoard({
         onUndo: handleUndo,
         onRedo: handleRedo,
         onClear: handleClear,
+        onExport: () => setShowExportModal(true),
       })
     : toolbar;
   const commentCounts = comments.reduce<Record<string, number>>((counts, comment) => {
@@ -583,8 +694,109 @@ function CanvasBoard({
           </aside>
         ) : null}
       </div>
+      {showExportModal ? (
+        <ExportModal
+          options={exportOptions}
+          canExport={canExport}
+          exporting={exporting}
+          onOptionsChange={setExportOptions}
+          onClose={() => setShowExportModal(false)}
+          onExport={handleExport}
+        />
+      ) : null}
     </section>
   );
 }
 
 export default CanvasBoard;
+
+function ExportModal({
+  options,
+  canExport,
+  exporting,
+  onOptionsChange,
+  onClose,
+  onExport,
+}: {
+  options: ExportOptions;
+  canExport: boolean;
+  exporting: ExportType | null;
+  onOptionsChange: (options: ExportOptions) => void;
+  onClose: () => void;
+  onExport: (exportType: ExportType) => void;
+}) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 px-4 py-6">
+      <div className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-5 shadow-board">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <h2 className="text-lg font-semibold text-slate-950">Export board</h2>
+            <p className="mt-1 text-sm text-slate-500">Download the current canvas or the saved structured board state.</p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-lg border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-600 transition hover:bg-slate-50"
+          >
+            Close
+          </button>
+        </div>
+
+        <div className="mt-4 grid gap-2">
+          <Toggle
+            label="Transparent PNG background"
+            checked={options.transparentBackground}
+            onChange={(checked) => onOptionsChange({ ...options, transparentBackground: checked })}
+          />
+          <Toggle
+            label="Include comments in JSON"
+            checked={options.includeComments}
+            onChange={(checked) => onOptionsChange({ ...options, includeComments: checked })}
+          />
+          <Toggle
+            label="Include AI summaries in JSON"
+            checked={options.includeAISummaries}
+            onChange={(checked) => onOptionsChange({ ...options, includeAISummaries: checked })}
+          />
+          <Toggle
+            label="Include deleted/history objects"
+            checked={options.includeDeleted}
+            onChange={(checked) => onOptionsChange({ ...options, includeDeleted: checked })}
+          />
+        </div>
+
+        {!canExport ? <p className="mt-3 text-sm font-semibold text-red-600">You do not have permission to export this board.</p> : null}
+
+        <div className="mt-5 grid gap-2 sm:grid-cols-3">
+          {(['PNG', 'PDF', 'JSON'] as ExportType[]).map((type) => (
+            <button
+              key={type}
+              type="button"
+              disabled={!canExport || exporting !== null}
+              onClick={() => onExport(type)}
+              className="rounded-lg bg-blue-600 px-3 py-2 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-300"
+            >
+              {exporting === type ? 'Exporting...' : `Export ${type}`}
+            </button>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Toggle({ label, checked, onChange }: { label: string; checked: boolean; onChange: (checked: boolean) => void }) {
+  return (
+    <label className="flex items-center justify-between gap-3 rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-700">
+      {label}
+      <input type="checkbox" checked={checked} onChange={(event) => onChange(event.target.checked)} className="accent-blue-600" />
+    </label>
+  );
+}
+
+const slugify = (value: string) =>
+  value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-|-$/g, '')
+    .slice(0, 80) || 'collabcanvas-board';

@@ -8,6 +8,7 @@ import { AISummaryService } from './aiSummaryService.js';
 import { createApiRoutes } from './apiRoutes.js';
 import { ChatService } from './chatService.js';
 import { CommentService } from './commentService.js';
+import { ExportService } from './exportService.js';
 import { OperationManager } from './operationManager.js';
 import { PersistenceManager } from './persistenceManager.js';
 import { PermissionManager } from './permissionManager.js';
@@ -29,6 +30,7 @@ const activity = new ActivityService(prisma);
 const chat = new ChatService(prisma);
 const comments = new CommentService(prisma);
 const aiSummaries = new AISummaryService(prisma);
+const exports = new ExportService(prisma);
 
 app.use(cors({ origin: clientOrigin }));
 app.use(express.json());
@@ -37,7 +39,7 @@ app.get('/health', (_request, response) => {
   response.json({ ok: true });
 });
 
-app.use('/api', createApiRoutes(persistence, operations, permissions, { chat, comments, activity, aiSummaries }));
+app.use('/api', createApiRoutes(persistence, operations, permissions, { chat, comments, activity, aiSummaries, exports }));
 
 app.use((error: unknown, _request: express.Request, response: express.Response, _next: express.NextFunction) => {
   console.error(error);

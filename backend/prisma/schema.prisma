@@ -32,6 +32,7 @@ enum ActivityType {
   COMMENT_ADD
   VERSION_CREATE
   VERSION_RESTORE
+  BOARD_EXPORT
 }
 
 enum SummaryType {
@@ -39,6 +40,12 @@ enum SummaryType {
   ACTION_ITEMS
   CLASS_NOTES
   MIND_MAP
+}
+
+enum ExportType {
+  PNG
+  PDF
+  JSON
 }
 
 model User {
@@ -56,6 +63,7 @@ model User {
   chatMessages ChatMessage[]
   activityLogs ActivityLog[]
   aiSummaries  AISummary[]
+  exports      BoardExport[]
 
   @@index([email])
 }
@@ -67,6 +75,7 @@ model Room {
   visibility             RoomVisibility     @default(PRIVATE)
   allowViewerComments    Boolean            @default(false)
   allowViewerAISummaries Boolean            @default(false)
+  allowViewerExports     Boolean            @default(false)
   lockBoardEditing       Boolean            @default(false)
   ownerId                String
   owner                  User               @relation("RoomOwner", fields: [ownerId], references: [id])
@@ -76,6 +85,7 @@ model Room {
   chatMessages           ChatMessage[]
   activityLogs           ActivityLog[]
   aiSummaries            AISummary[]
+  exports                BoardExport[]
   createdAt              DateTime           @default(now())
   updatedAt              DateTime           @updatedAt
 
@@ -95,6 +105,7 @@ model Board {
   versions           BoardVersion[]
   comments           Comment[]
   aiSummaries        AISummary[]
+  exports            BoardExport[]
   createdAt          DateTime           @default(now())
   updatedAt          DateTime           @updatedAt
 
@@ -231,4 +242,21 @@ model AISummary {
   @@index([roomId])
   @@index([generatedBy])
   @@index([summaryType])
+}
+
+model BoardExport {
+  id         String     @id @default(cuid())
+  boardId    String
+  roomId     String
+  exportedBy String
+  exportType ExportType
+  createdAt  DateTime   @default(now())
+  board      Board      @relation(fields: [boardId], references: [id], onDelete: Cascade)
+  room       Room       @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  user       User       @relation(fields: [exportedBy], references: [id])
+
+  @@index([boardId])
+  @@index([roomId])
+  @@index([exportedBy])
+  @@index([exportType])
 }

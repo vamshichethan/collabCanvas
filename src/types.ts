@@ -95,6 +95,7 @@ export type DashboardRoom = {
   visibility: 'PUBLIC' | 'PRIVATE';
   allowViewerComments: boolean;
   allowViewerAISummaries: boolean;
+  allowViewerExports: boolean;
   lockBoardEditing: boolean;
   ownerId: string;
   boards: Array<{
@@ -170,7 +171,8 @@ export type ActivityType =
   | 'OBJECT_DELETE'
   | 'COMMENT_ADD'
   | 'VERSION_CREATE'
-  | 'VERSION_RESTORE';
+  | 'VERSION_RESTORE'
+  | 'BOARD_EXPORT';
 
 export type ActivityItem = {
   id: string;
@@ -178,5 +180,29 @@ export type ActivityItem = {
   userId?: string | null;
   type: ActivityType;
   message: string;
+  createdAt: string;
+};
+
+export type ExportType = 'PNG' | 'PDF' | 'JSON';
+
+export type BoardJsonExport = {
+  boardId: string;
+  roomId: string;
+  title: string;
+  exportedAt: string;
+  lastSequenceNumber: number;
+  objects: WhiteboardObject[];
+  comments: ObjectComment[];
+  versions: BoardVersionRecord[];
+  aiSummaries: AISummaryRecord[];
+};
+
+export type BoardExportRecord = {
+  id: string;
+  boardId: string;
+  roomId: string;
+  exportedBy: string;
+  exportedByName: string;
+  exportType: ExportType;
   createdAt: string;
 };
