@@ -79,6 +79,15 @@ export class PermissionManager {
     return this.requireAction(roomId, userId, 'CREATE_VERSION');
   }
 
+  async canGenerateAISummary(roomId: string, userId: string) {
+    const participant = await this.getParticipant(roomId, userId);
+    if (!participant) return 'user is not a room participant';
+    if (participant.role === 'VIEWER') {
+      return participant.room.allowViewerAISummaries ? null : 'viewer AI summaries are disabled';
+    }
+    return canRole(participant.role, 'GENERATE_AI_SUMMARY') ? null : 'permission denied: GENERATE_AI_SUMMARY';
+  }
+
   async canUpdateSettings(roomId: string, userId: string) {
     return this.requireAction(roomId, userId, 'UPDATE_ROOM_SETTINGS');
   }

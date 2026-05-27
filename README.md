@@ -40,6 +40,7 @@ DATABASE_URL=""
 FRONTEND_URL="http://localhost:5173"
 CLIENT_ORIGIN="http://localhost:5173"
 PORT=5000
+GEMINI_API_KEY=""
 ```
 
 ## Build Commands
@@ -80,6 +81,7 @@ backend/
   src/
     apiRoutes.ts
     activityService.ts
+    aiSummaryService.ts
     chatService.ts
     commentService.ts
     messageUtils.ts
@@ -197,6 +199,7 @@ Prisma models live in `backend/prisma/schema.prisma`:
 - `Comment`
 - `ChatMessage`
 - `ActivityLog`
+- `AISummary`
 
 Use Neon PostgreSQL or Supabase PostgreSQL by putting the connection string in `backend/.env` as `DATABASE_URL`.
 
@@ -205,7 +208,7 @@ Use Neon PostgreSQL or Supabase PostgreSQL by putting the connection string in `
 - `POST /api/rooms` creates a persisted room, board, owner participant, and invite code.
 - `GET /api/rooms/:roomId` returns room details, boards, and participants.
 - `POST /api/rooms/:roomId/join` persists participant membership.
-- `PATCH /api/rooms/:roomId/settings` updates public/private, viewer comments, and board lock settings.
+- `PATCH /api/rooms/:roomId/settings` updates public/private, viewer comments, viewer AI summaries, and board lock settings.
 - `POST /api/rooms/:roomId/regenerate-invite` regenerates the invite code.
 - `POST /api/rooms/:roomId/participants` invites a participant.
 - `PATCH /api/rooms/:roomId/participants/:userId` changes a participant role.
@@ -219,6 +222,8 @@ Use Neon PostgreSQL or Supabase PostgreSQL by putting the connection string in `
 - `GET /api/rooms/:roomId/chat` loads room chat history.
 - `GET /api/boards/:boardId/comments` loads object-level comments.
 - `GET /api/rooms/:roomId/activity` loads the room activity feed.
+- `GET /api/boards/:boardId/ai-summaries` loads saved AI summaries.
+- `POST /api/boards/:boardId/ai-summary` generates and saves an AI summary.
 
 ## Snapshots And Versions
 
@@ -228,8 +233,8 @@ Autosave snapshots are created every 25 accepted drawing operations. Each snapsh
 
 Permissions are centralized in `backend/src/permissionManager.ts`, `backend/src/roleGuards.ts`, and `backend/src/permissionMiddleware.ts`. The backend never trusts the frontend role; every REST mutation and Socket.IO drawing operation checks the persisted `Participant.role` in PostgreSQL.
 
-- `OWNER`: can draw, edit, delete, comment, invite, change roles, update room settings, create/restore versions, and transfer ownership.
-- `EDITOR`: can draw, edit objects, delete own objects, comment, and create versions.
+- `OWNER`: can draw, edit, delete, comment, invite, change roles, update room settings, create/restore versions, generate AI summaries, and transfer ownership.
+- `EDITOR`: can draw, edit objects, delete own objects, comment, create versions, and generate AI summaries.
 - `VIEWER`: can view the board, move cursors, read chat, and comment only when `allowViewerComments` is enabled.
 
 Viewer mode is enforced twice: the frontend disables drawing controls and passes `readOnly` into the board, while the backend still rejects viewer drawing operations through `operation:submit`. Editors are also blocked from role changes, room settings changes, and version restores. If `lockBoardEditing` is enabled, only owners can keep editing.
@@ -249,3 +254,24 @@ Comment badges are rendered as lightweight overlays near objects with unresolved
 ## Activity Feed
 
 `ActivityLog` stores human-readable room events for joins, leaves, object creates/deletes, comments, and version actions. The frontend loads existing activity through `GET /api/rooms/:roomId/activity` and receives live `activity:new` events as the backend records new logs.
+
+## AI Summaries
+
+AI summaries are generated only by the backend through `backend/src/aiSummaryService.ts`, so `GEMINI_API_KEY` is never exposed to the frontend. The service calls Gemini `generateContent` with a structured prompt that asks for JSON only:
+
+```json
+{
+  "summary": "...",
+  "keyPoints": ["..."],
+  "actionItems": ["..."],
+  "decisions": ["..."],
+  "openQuestions": ["..."],
+  "nextSteps": ["..."]
+}
+```
+
+The AI context is intentionally compact. It includes the board title, latest version name when present, text objects on the board, object type counts, recent comments, recent chat messages, and recent activity. Raw Fabric internals and excessive historical data are not sent.
+
+Generated summaries are stored in `AISummary` with `boardId`, `roomId`, `generatedBy`, `summaryType`, JSON summary content, and `createdAt`. The right sidebar has an AI tab for choosing `MEETING_NOTES`, `ACTION_ITEMS`, `CLASS_NOTES`, or `MIND_MAP`, generating a summary, copying it, and viewing saved summaries.
+
+Owners and editors can generate summaries. Viewers can read saved summaries, and can generate only when `allowViewerAISummaries` is enabled for the room. Empty boards, Gemini failures, invalid JSON, missing API keys, and rate limits return clear API errors instead of failing silently.

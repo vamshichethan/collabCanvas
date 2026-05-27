@@ -1,4 +1,13 @@
-import type { ActivityItem, BoardVersionRecord, ChatMessage, DashboardRoom, ObjectComment, WhiteboardObject } from '../types';
+import type {
+  ActivityItem,
+  AISummaryRecord,
+  BoardVersionRecord,
+  ChatMessage,
+  DashboardRoom,
+  ObjectComment,
+  SummaryType,
+  WhiteboardObject,
+} from '../types';
 
 const apiUrl = import.meta.env.VITE_API_URL ?? 'http://localhost:5000';
 
@@ -29,7 +38,7 @@ export const api = {
   async updateRoomSettings(
     roomId: string,
     userId: string,
-    settings: { visibility?: 'PUBLIC' | 'PRIVATE'; allowViewerComments?: boolean; lockBoardEditing?: boolean },
+    settings: { visibility?: 'PUBLIC' | 'PRIVATE'; allowViewerComments?: boolean; allowViewerAISummaries?: boolean; lockBoardEditing?: boolean },
   ) {
     return request<DashboardRoom>(`/api/rooms/${encodeURIComponent(roomId)}/settings`, {
       method: 'PATCH',
@@ -65,6 +74,17 @@ export const api = {
     return request<ObjectComment[]>(`/api/boards/${encodeURIComponent(boardId)}/comments`);
   },
 
+  async getAISummaries(boardId: string) {
+    return request<AISummaryRecord[]>(`/api/boards/${encodeURIComponent(boardId)}/ai-summaries`);
+  },
+
+  async generateAISummary(boardId: string, userId: string, summaryType: SummaryType) {
+    return request<AISummaryRecord>(`/api/boards/${encodeURIComponent(boardId)}/ai-summary`, {
+      method: 'POST',
+      body: JSON.stringify({ userId, summaryType }),
+    });
+  },
+
   async createVersion(boardId: string, name: string, createdBy: string) {
     return request<BoardVersionRecord>(`/api/boards/${encodeURIComponent(boardId)}/versions`, {
       method: 'POST',
@@ -93,7 +113,8 @@ async function request<T>(path: string, init: RequestInit = {}) {
   });
 
   if (!response.ok) {
-    throw new Error(`Request failed: ${response.status}`);
+    const body = (await response.json().catch(() => null)) as { error?: string } | null;
+    throw new Error(body?.error ?? `Request failed: ${response.status}`);
   }
 
   return response.json() as Promise<T>;

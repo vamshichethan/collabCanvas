@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import type { ActivityService } from './activityService.js';
+import { isSummaryType, type AISummaryService } from './aiSummaryService.js';
 import type { ChatService } from './chatService.js';
 import type { CommentService } from './commentService.js';
 import { OperationManager } from './operationManager.js';
@@ -11,7 +12,7 @@ export const createApiRoutes = (
   persistence: PersistenceManager,
   operations: OperationManager,
   permissions: PermissionManager,
-  services: { chat: ChatService; comments: CommentService; activity: ActivityService },
+  services: { chat: ChatService; comments: CommentService; activity: ActivityService; aiSummaries: AISummaryService },
 ) => {
   const router = Router();
 
@@ -194,6 +195,49 @@ export const createApiRoutes = (
     try {
       response.json(await persistence.listSnapshots(request.params.boardId));
     } catch (error) {
+      next(error);
+    }
+  });
+
+  router.get('/boards/:boardId/ai-summaries', async (request, response, next) => {
+    try {
+      response.json(await services.aiSummaries.list(request.params.boardId));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post('/boards/:boardId/ai-summary', async (request, response, next) => {
+    try {
+      const roomId = await persistence.getBoardRoomId(request.params.boardId);
+      const userId = String(request.body?.userId ?? request.body?.generatedBy ?? '');
+      const summaryType = request.body?.summaryType;
+      if (!isSummaryType(summaryType)) {
+        response.status(400).json({ error: 'summaryType is invalid' });
+        return;
+      }
+
+      const reason = roomId ? await permissions.canGenerateAISummary(roomId, userId) : 'board not found';
+      if (reason) {
+        response.status(403).json({ error: reason });
+        return;
+      }
+
+      response.status(201).json(await services.aiSummaries.generate(request.params.boardId, userId, summaryType));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unable to generate AI summary';
+      if (message.includes('GEMINI_API_KEY')) {
+        response.status(503).json({ error: message });
+        return;
+      }
+      if (message.includes('rate limit')) {
+        response.status(429).json({ error: message });
+        return;
+      }
+      if (message.includes('invalid JSON') || message.includes('empty summary')) {
+        response.status(502).json({ error: message });
+        return;
+      }
       next(error);
     }
   });

@@ -8,7 +8,7 @@ import VersionHistoryPanel from './components/VersionHistoryPanel';
 import { getOrCreateIdentity, useRoomCollaboration } from './hooks/useRoomCollaboration';
 import { api } from './lib/api';
 import { getRoomIdFromPath, navigateToRoom } from './lib/room';
-import type { DashboardRoom, DrawingSettings, Tool, WhiteboardObject } from './types';
+import type { AISummaryRecord, DashboardRoom, DrawingSettings, SummaryType, Tool, WhiteboardObject } from './types';
 
 function App() {
   const [roomId, setRoomId] = useState(getRoomIdFromPath());
@@ -133,6 +133,9 @@ function RoomPage({ roomId }: { roomId: string }) {
   const [room, setRoom] = useState<DashboardRoom | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [selectedObjectId, setSelectedObjectId] = useState<string | null>(null);
+  const [aiSummaries, setAiSummaries] = useState<AISummaryRecord[]>([]);
+  const [aiSummaryLoading, setAiSummaryLoading] = useState(false);
+  const [aiSummaryError, setAiSummaryError] = useState<string | null>(null);
   const inviteLink = useMemo(() => `${window.location.origin}/room/${roomId}`, [roomId]);
   const collaboration = useRoomCollaboration(roomId);
   const currentDbParticipant = room?.participants.find((participant) => participant.userId === collaboration.userId);
@@ -143,6 +146,7 @@ function RoomPage({ roomId }: { roomId: string }) {
   const readOnly = isViewer || boardLocked;
   const canSendChat = currentRole === 'OWNER' || currentRole === 'EDITOR' || Boolean(room?.allowViewerComments);
   const canComment = canSendChat;
+  const canGenerateAISummary = currentRole === 'OWNER' || currentRole === 'EDITOR' || Boolean(room?.allowViewerAISummaries);
 
   const loadRoom = async () => {
     try {
@@ -154,6 +158,23 @@ function RoomPage({ roomId }: { roomId: string }) {
 
   useEffect(() => {
     void loadRoom();
+  }, [roomId]);
+
+  useEffect(() => {
+    let active = true;
+
+    api
+      .getAISummaries(roomId)
+      .then((summaries) => {
+        if (active) setAiSummaries(summaries);
+      })
+      .catch(() => {
+        if (active) setAiSummaries([]);
+      });
+
+    return () => {
+      active = false;
+    };
   }, [roomId]);
 
   useEffect(() => {
@@ -191,7 +212,12 @@ function RoomPage({ roomId }: { roomId: string }) {
     }
   };
 
-  const updateSettings = async (settings: { visibility?: 'PUBLIC' | 'PRIVATE'; allowViewerComments?: boolean; lockBoardEditing?: boolean }) => {
+  const updateSettings = async (settings: {
+    visibility?: 'PUBLIC' | 'PRIVATE';
+    allowViewerComments?: boolean;
+    allowViewerAISummaries?: boolean;
+    lockBoardEditing?: boolean;
+  }) => {
     try {
       setRoom(await api.updateRoomSettings(roomId, collaboration.userId, settings));
     } catch {
@@ -204,6 +230,21 @@ function RoomPage({ roomId }: { roomId: string }) {
       setRoom(await api.regenerateInvite(roomId, collaboration.userId));
     } catch {
       setToast('Only owners can regenerate invite links');
+    }
+  };
+
+  const generateAISummary = async (summaryType: SummaryType) => {
+    setAiSummaryLoading(true);
+    setAiSummaryError(null);
+    try {
+      const summary = await api.generateAISummary(roomId, collaboration.userId, summaryType);
+      setAiSummaries((current) => [summary, ...current.filter((item) => item.id !== summary.id)]);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unable to generate summary';
+      setAiSummaryError(message);
+      setToast('Unable to generate AI summary');
+    } finally {
+      setAiSummaryLoading(false);
     }
   };
 
@@ -231,7 +272,7 @@ function RoomPage({ roomId }: { roomId: string }) {
             >
               {copied ? 'Copied' : 'Copy invite'}
             </button>
-            <p className="text-xs font-medium uppercase tracking-[0.18em] text-slate-400">Phase 7</p>
+            <p className="text-xs font-medium uppercase tracking-[0.18em] text-slate-400">Phase 8</p>
           </div>
         </div>
       </header>
@@ -283,13 +324,18 @@ function RoomPage({ roomId }: { roomId: string }) {
             selectedObjectId={selectedObjectId}
             canSendChat={canSendChat}
             canComment={canComment}
+            canGenerateAISummary={canGenerateAISummary}
             chatMessages={collaboration.chatMessages}
             comments={collaboration.comments}
             activityItems={collaboration.activityItems}
+            aiSummaries={aiSummaries}
+            aiSummaryLoading={aiSummaryLoading}
+            aiSummaryError={aiSummaryError}
             onSendChat={collaboration.sendChat}
             onAddComment={collaboration.addComment}
             onResolveComment={collaboration.resolveComment}
             onDeleteComment={collaboration.deleteComment}
+            onGenerateAISummary={generateAISummary}
           />
         </div>
       </div>

@@ -10,6 +10,7 @@ export type PermissionAction =
   | 'CHANGE_ROLES'
   | 'CREATE_VERSION'
   | 'RESTORE_VERSION'
+  | 'GENERATE_AI_SUMMARY'
   | 'DELETE_ROOM'
   | 'UPDATE_ROOM_SETTINGS';
 
@@ -23,11 +24,12 @@ const ownerActions: PermissionAction[] = [
   'CHANGE_ROLES',
   'CREATE_VERSION',
   'RESTORE_VERSION',
+  'GENERATE_AI_SUMMARY',
   'DELETE_ROOM',
   'UPDATE_ROOM_SETTINGS',
 ];
 
-const editorActions: PermissionAction[] = ['DRAW', 'EDIT_OBJECT', 'DELETE_OWN_OBJECT', 'COMMENT', 'CREATE_VERSION'];
+const editorActions: PermissionAction[] = ['DRAW', 'EDIT_OBJECT', 'DELETE_OWN_OBJECT', 'COMMENT', 'CREATE_VERSION', 'GENERATE_AI_SUMMARY'];
 const viewerActions: PermissionAction[] = [];
 
 export const canRole = (role: ParticipantRole | null | undefined, action: PermissionAction) => {

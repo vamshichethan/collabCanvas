@@ -34,6 +34,13 @@ enum ActivityType {
   VERSION_RESTORE
 }
 
+enum SummaryType {
+  MEETING_NOTES
+  ACTION_ITEMS
+  CLASS_NOTES
+  MIND_MAP
+}
+
 model User {
   id           String             @id
   name         String
@@ -48,26 +55,29 @@ model User {
   comments     Comment[]
   chatMessages ChatMessage[]
   activityLogs ActivityLog[]
+  aiSummaries  AISummary[]
 
   @@index([email])
 }
 
 model Room {
-  id                  String             @id
-  name                String
-  inviteCode          String             @unique
-  visibility          RoomVisibility     @default(PRIVATE)
-  allowViewerComments Boolean            @default(false)
-  lockBoardEditing    Boolean            @default(false)
-  ownerId             String
-  owner               User               @relation("RoomOwner", fields: [ownerId], references: [id])
-  boards              Board[]
-  participants        Participant[]
-  operations          DrawingOperation[]
-  chatMessages        ChatMessage[]
-  activityLogs        ActivityLog[]
-  createdAt           DateTime           @default(now())
-  updatedAt           DateTime           @updatedAt
+  id                     String             @id
+  name                   String
+  inviteCode             String             @unique
+  visibility             RoomVisibility     @default(PRIVATE)
+  allowViewerComments    Boolean            @default(false)
+  allowViewerAISummaries Boolean            @default(false)
+  lockBoardEditing       Boolean            @default(false)
+  ownerId                String
+  owner                  User               @relation("RoomOwner", fields: [ownerId], references: [id])
+  boards                 Board[]
+  participants           Participant[]
+  operations             DrawingOperation[]
+  chatMessages           ChatMessage[]
+  activityLogs           ActivityLog[]
+  aiSummaries            AISummary[]
+  createdAt              DateTime           @default(now())
+  updatedAt              DateTime           @updatedAt
 
   @@index([ownerId])
   @@index([inviteCode])
@@ -84,6 +94,7 @@ model Board {
   snapshots          BoardSnapshot[]
   versions           BoardVersion[]
   comments           Comment[]
+  aiSummaries        AISummary[]
   createdAt          DateTime           @default(now())
   updatedAt          DateTime           @updatedAt
 
@@ -202,4 +213,22 @@ model ActivityLog {
   @@index([roomId])
   @@index([userId])
   @@index([type])
+}
+
+model AISummary {
+  id          String      @id @default(cuid())
+  boardId     String
+  roomId      String
+  generatedBy String
+  summaryType SummaryType
+  summary     Json
+  createdAt   DateTime    @default(now())
+  board       Board       @relation(fields: [boardId], references: [id], onDelete: Cascade)
+  room        Room        @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  user        User        @relation(fields: [generatedBy], references: [id])
+
+  @@index([boardId])
+  @@index([roomId])
+  @@index([generatedBy])
+  @@index([summaryType])
 }

@@ -94,6 +94,7 @@ export type DashboardRoom = {
   inviteCode: string;
   visibility: 'PUBLIC' | 'PRIVATE';
   allowViewerComments: boolean;
+  allowViewerAISummaries: boolean;
   lockBoardEditing: boolean;
   ownerId: string;
   boards: Array<{
@@ -113,6 +114,32 @@ export type DashboardRoom = {
     };
   }>;
   updatedAt: string;
+};
+
+export type SummaryType = 'MEETING_NOTES' | 'ACTION_ITEMS' | 'CLASS_NOTES' | 'MIND_MAP';
+
+export type AISummaryContent = {
+  summary: string;
+  keyPoints: string[];
+  actionItems: string[];
+  decisions: string[];
+  openQuestions: string[];
+  nextSteps: string[];
+};
+
+export type AISummaryRecord = {
+  id: string;
+  boardId: string;
+  roomId: string;
+  generatedBy: string;
+  generatedByName: string;
+  summaryType: SummaryType;
+  summary: AISummaryContent;
+  actionItems?: string[];
+  decisions?: string[];
+  openQuestions?: string[];
+  generatedAt?: string;
+  createdAt: string;
 };
 
 export type ChatMessage = {

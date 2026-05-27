@@ -3,7 +3,12 @@ import type { DashboardRoom } from '../types';
 type RoomSettingsPanelProps = {
   room: DashboardRoom | null;
   isOwner: boolean;
-  onChange: (settings: { visibility?: 'PUBLIC' | 'PRIVATE'; allowViewerComments?: boolean; lockBoardEditing?: boolean }) => void;
+  onChange: (settings: {
+    visibility?: 'PUBLIC' | 'PRIVATE';
+    allowViewerComments?: boolean;
+    allowViewerAISummaries?: boolean;
+    lockBoardEditing?: boolean;
+  }) => void;
   onRegenerateInvite: () => void;
 };
 
@@ -16,7 +21,7 @@ function RoomSettingsPanel({ room, isOwner, onChange, onRegenerateInvite }: Room
         <h2 className="text-sm font-semibold text-slate-900">Room settings</h2>
         <span className="text-xs font-semibold text-slate-400">{room.inviteCode}</span>
       </div>
-      <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
         <label className="flex items-center justify-between gap-3 rounded-lg border border-slate-200 px-3 py-2 text-sm">
           Public
           <input
@@ -44,6 +49,16 @@ function RoomSettingsPanel({ room, isOwner, onChange, onRegenerateInvite }: Room
             checked={room.lockBoardEditing}
             disabled={!isOwner}
             onChange={(event) => onChange({ lockBoardEditing: event.target.checked })}
+            className="accent-blue-600"
+          />
+        </label>
+        <label className="flex items-center justify-between gap-3 rounded-lg border border-slate-200 px-3 py-2 text-sm">
+          Viewer AI
+          <input
+            type="checkbox"
+            checked={room.allowViewerAISummaries}
+            disabled={!isOwner}
+            onChange={(event) => onChange({ allowViewerAISummaries: event.target.checked })}
             className="accent-blue-600"
           />
         </label>
