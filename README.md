@@ -65,8 +65,11 @@ src/
   index.css
 backend/
   src/
+    operationManager.ts
+    permissionManager.ts
     roomManager.ts
     server.ts
+    socketHandlers.ts
     types.ts
 ```
 
@@ -112,24 +115,40 @@ Undo moves the current object snapshot to a redo stack and reloads the previous 
 
 The board has a sync-friendly state model: create, update, and delete actions all resolve into plain JSON objects with stable IDs and timestamps. Socket.IO sends object-level operations instead of pixels or Fabric-specific payloads.
 
-## Socket.IO Flow
+## Operation Log Design
 
-The frontend opens rooms at `/room/:roomId`. Creating a room emits `room:create`; joining or reconnecting emits `room:join`. The backend keeps an in-memory room map with participants and the latest board state per room. On join, the server sends `board:sync` to the joining socket and emits `room:participants` to the room.
+The frontend opens rooms at `/room/:roomId`. Creating a room emits `room:create`; joining or reconnecting emits `room:join`. The backend keeps rooms and participants in `roomManager.ts`, permissions in `permissionManager.ts`, and ordered room operation logs in `operationManager.ts`.
 
-Whiteboard edits emit `board:operation` with this shape:
+Every whiteboard edit is submitted as `operation:submit`. The client sends the operation intent with `clientTimestamp`; the backend validates the user and room, assigns `serverTimestamp` and a monotonically increasing `sequenceNumber`, appends the operation to the room log, and rebuilds the active board state by replaying operations in sequence order.
+
+Applied operations have this shape:
 
 ```ts
 {
   opId: string;
   roomId: string;
+  boardId: string;
   objectId: string;
   type: 'CREATE' | 'UPDATE' | 'DELETE';
-  payload: WhiteboardObject;
+  payload: WhiteboardObject | null;
+  previousPayload?: WhiteboardObject | null;
   userId: string;
-  timestamp: number;
+  clientTimestamp: number;
+  serverTimestamp: number;
+  sequenceNumber: number;
 }
 ```
 
-The server applies the operation to the room board state and broadcasts it with `socket.to(roomId)`, so the sender does not receive a duplicate operation. Remote clients merge the operation into their `WhiteboardObject[]` state and re-render Fabric from that object model.
+## Socket.IO Flow
+
+The sender gets `operation:ack`. Other room users get `operation:applied`, so the sender does not receive duplicate operations for edits already applied optimistically. New users receive `board:full-sync` with the active board and latest sequence number.
 
 Cursor presence uses throttled `cursor:move` events. Each client broadcasts pointer coordinates in canvas space, and other clients render those cursors with the sender name.
+
+## Conflict Handling
+
+The operation log is the authority. `CREATE` adds an object only when the `objectId` is not already active. `UPDATE` applies only when the object exists and is not deleted. `DELETE` soft-deletes the object by setting `deleted`, `deletedAt`, and `deletedBy`. If two users update the same object, the operation with the later server `sequenceNumber` wins because the board state is replayed in backend order.
+
+## Reconnect Recovery
+
+Clients keep `lastSeenSequenceNumber` in local storage per room. On reconnect they rejoin the room and emit `operation:missed-request` with that number. The backend responds with `operation:missed-response`, containing operations after the requested sequence. If a submitted optimistic operation is rejected, the client rolls back by applying the server-provided board state or requests a full recovery path.

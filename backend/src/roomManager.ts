@@ -1,9 +1,8 @@
-import type { BoardOperation, Participant, WhiteboardObject } from './types.js';
+import type { Participant } from './types.js';
 
 type RoomState = {
   roomId: string;
   participants: Map<string, Participant>;
-  board: WhiteboardObject[];
   createdAt: number;
 };
 
@@ -15,7 +14,6 @@ export class RoomManager {
       this.rooms.set(roomId, {
         roomId,
         participants: new Map(),
-        board: [],
         createdAt: Date.now(),
       });
     }
@@ -36,7 +34,7 @@ export class RoomManager {
     room.participants.delete(userId);
     const participants = this.getParticipants(roomId);
 
-    if (room.participants.size === 0 && room.board.length === 0) {
+    if (room.participants.size === 0) {
       this.rooms.delete(roomId);
     }
 
@@ -62,39 +60,16 @@ export class RoomManager {
     return removals;
   }
 
-  getBoard(roomId: string) {
-    return this.rooms.get(roomId)?.board ?? [];
-  }
-
   getParticipants(roomId: string) {
     return Array.from(this.rooms.get(roomId)?.participants.values() ?? []);
   }
 
-  applyOperation(operation: BoardOperation) {
-    const room = this.createRoom(operation.roomId);
-    const index = room.board.findIndex((object) => object.id === operation.objectId);
+  isParticipant(roomId: string, userId: string) {
+    return this.rooms.get(roomId)?.participants.has(userId) ?? false;
+  }
 
-    if (operation.type === 'DELETE') {
-      room.board = room.board.filter((object) => object.id !== operation.objectId);
-      return room.board;
-    }
-
-    const payload = {
-      ...operation.payload,
-      updatedAt: operation.timestamp,
-    };
-
-    if (index === -1) {
-      room.board = [...room.board, payload];
-    } else {
-      room.board = room.board.map((object) =>
-        object.id === operation.objectId
-          ? { ...object, ...payload, createdAt: object.createdAt }
-          : object,
-      );
-    }
-
-    return room.board;
+  getParticipant(roomId: string, userId: string) {
+    return this.rooms.get(roomId)?.participants.get(userId) ?? null;
   }
 
   private createRoomId() {

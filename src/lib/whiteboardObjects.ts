@@ -216,7 +216,7 @@ export const createFabricObjectFromWhiteboardObject = (object: WhiteboardObject)
 
 export const loadCanvasFromObjects = (canvas: Canvas, objects: WhiteboardObject[]) => {
   canvas.getObjects().forEach((object) => canvas.remove(object));
-  objects.forEach((object) => canvas.add(createFabricObjectFromWhiteboardObject(object)));
+  objects.filter((object) => !object.deleted).forEach((object) => canvas.add(createFabricObjectFromWhiteboardObject(object)));
   canvas.discardActiveObject();
   canvas.requestRenderAll();
 };

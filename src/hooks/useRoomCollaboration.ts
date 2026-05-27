@@ -1,9 +1,26 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { io, type Socket } from 'socket.io-client';
 import { createClientId } from '../lib/ids';
-import type { BoardOperation, CursorPosition, Participant, WhiteboardObject } from '../types';
+import type {
+  BoardOperation,
+  ClientOperation,
+  CursorPosition,
+  OperationAck,
+  Participant,
+  WhiteboardObject,
+} from '../types';
 
 const socketUrl = import.meta.env.VITE_SOCKET_URL ?? 'http://localhost:4000';
+
+type FullSyncPayload = {
+  board: WhiteboardObject[];
+  lastSequenceNumber: number;
+};
+
+type MissedResponsePayload = {
+  operations: BoardOperation[];
+  lastSequenceNumber: number;
+};
 
 export const getOrCreateIdentity = () => {
   const storedUserId = localStorage.getItem('collabcanvas:userId');
@@ -14,18 +31,37 @@ export const getOrCreateIdentity = () => {
   const name = storedName ?? `User ${userId.slice(-4)}`;
   if (!storedName) localStorage.setItem('collabcanvas:name', name);
 
-  return { userId, name };
+  return { userId, name, role: 'editor' as const };
 };
 
 export function useRoomCollaboration(roomId: string) {
   const identity = useMemo(getOrCreateIdentity, []);
   const socketRef = useRef<Socket | null>(null);
   const lastCursorEmit = useRef(0);
+  const lastSeenSequenceNumber = useRef(Number(localStorage.getItem(`collabcanvas:${roomId}:lastSequence`) ?? 0));
   const [participants, setParticipants] = useState<Participant[]>([]);
   const [remoteOperation, setRemoteOperation] = useState<BoardOperation | null>(null);
   const [initialBoard, setInitialBoard] = useState<WhiteboardObject[] | null>(null);
   const [remoteCursors, setRemoteCursors] = useState<Record<string, CursorPosition>>({});
   const [connected, setConnected] = useState(false);
+
+  const markSequenceSeen = useCallback(
+    (sequenceNumber: number) => {
+      lastSeenSequenceNumber.current = Math.max(lastSeenSequenceNumber.current, sequenceNumber);
+      localStorage.setItem(`collabcanvas:${roomId}:lastSequence`, String(lastSeenSequenceNumber.current));
+    },
+    [roomId],
+  );
+
+  const applyRemoteOperation = useCallback(
+    (operation: BoardOperation) => {
+      markSequenceSeen(operation.sequenceNumber);
+      if (operation.userId !== identity.userId) {
+        setRemoteOperation(operation);
+      }
+    },
+    [identity.userId, markSequenceSeen],
+  );
 
   useEffect(() => {
     const socket = io(socketUrl, {
@@ -39,18 +75,45 @@ export function useRoomCollaboration(roomId: string) {
         roomId,
         userId: identity.userId,
         name: identity.name,
+        role: identity.role,
       });
     };
 
     socket.on('connect', () => {
       setConnected(true);
       joinRoom();
+      socket.emit('operation:missed-request', {
+        roomId,
+        afterSequenceNumber: lastSeenSequenceNumber.current,
+      });
     });
     socket.on('disconnect', () => setConnected(false));
     socket.on('room:participants', setParticipants);
-    socket.on('board:sync', setInitialBoard);
-    socket.on('board:operation', (operation: BoardOperation) => {
-      if (operation.userId !== identity.userId) setRemoteOperation(operation);
+    socket.on('board:full-sync', (payload: FullSyncPayload) => {
+      setInitialBoard(payload.board);
+      markSequenceSeen(payload.lastSequenceNumber);
+    });
+    socket.on('operation:ack', (ack: OperationAck) => {
+      if (ack.accepted && ack.operation) {
+        markSequenceSeen(ack.operation.sequenceNumber);
+        return;
+      }
+
+      if (ack.boardState) {
+        setInitialBoard(ack.boardState);
+      } else {
+        socket.emit('operation:missed-request', {
+          roomId,
+          afterSequenceNumber: 0,
+        });
+      }
+    });
+    socket.on('operation:applied', applyRemoteOperation);
+    socket.on('operation:missed-response', (payload: MissedResponsePayload) => {
+      payload.operations
+        .sort((a, b) => a.sequenceNumber - b.sequenceNumber)
+        .forEach(applyRemoteOperation);
+      markSequenceSeen(payload.lastSequenceNumber);
     });
     socket.on('cursor:move', (cursor: CursorPosition) => {
       if (cursor.userId === identity.userId) return;
@@ -70,10 +133,10 @@ export function useRoomCollaboration(roomId: string) {
       socket.disconnect();
       socketRef.current = null;
     };
-  }, [identity.name, identity.userId, roomId]);
+  }, [applyRemoteOperation, identity.name, identity.role, identity.userId, markSequenceSeen, roomId]);
 
-  const emitOperation = useCallback((operation: BoardOperation) => {
-    socketRef.current?.emit('board:operation', operation);
+  const emitOperation = useCallback((operation: ClientOperation) => {
+    socketRef.current?.emit('operation:submit', operation);
   }, []);
 
   const emitCursor = useCallback(

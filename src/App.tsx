@@ -115,7 +115,7 @@ function RoomPage({ roomId }: { roomId: string }) {
             >
               {copied ? 'Copied' : 'Copy invite'}
             </button>
-            <p className="text-xs font-medium uppercase tracking-[0.18em] text-slate-400">Phase 3</p>
+            <p className="text-xs font-medium uppercase tracking-[0.18em] text-slate-400">Phase 4</p>
           </div>
         </div>
       </header>

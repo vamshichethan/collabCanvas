@@ -27,7 +27,7 @@ import {
   tagFabricObject,
   updateWhiteboardObject,
 } from '../lib/whiteboardObjects';
-import type { BoardOperation, CursorPosition, DrawingSettings, Tool, WhiteboardObject } from '../types';
+import type { BoardOperation, ClientOperation, CursorPosition, DrawingSettings, Tool, WhiteboardObject } from '../types';
 
 type CanvasBoardProps = {
   activeTool: Tool;
@@ -39,7 +39,7 @@ type CanvasBoardProps = {
   initialObjects?: WhiteboardObject[] | null;
   remoteOperation?: BoardOperation | null;
   remoteCursors?: CursorPosition[];
-  onLocalOperation?: (operation: BoardOperation) => void;
+  onLocalOperation?: (operation: ClientOperation) => void;
   onCursorMove?: (x: number, y: number) => void;
 };
 
@@ -94,11 +94,13 @@ function CanvasBoard({
         onLocalOperation({
           opId: createClientId('op'),
           roomId,
+          boardId: roomId,
           objectId: object.id,
           type: previous ? 'UPDATE' : 'CREATE',
           payload: { ...object, createdBy: object.createdBy ?? userId, updatedAt: timestamp },
+          previousPayload: previous ?? null,
           userId,
-          timestamp,
+          clientTimestamp: timestamp,
         });
       });
 
@@ -108,11 +110,13 @@ function CanvasBoard({
         onLocalOperation({
           opId: createClientId('op'),
           roomId,
+          boardId: roomId,
           objectId: object.id,
           type: 'DELETE',
-          payload: object,
+          payload: null,
+          previousPayload: object,
           userId,
-          timestamp,
+          clientTimestamp: timestamp,
         });
       });
     },
@@ -177,7 +181,7 @@ function CanvasBoard({
     let nextObjects = objectsRef.current;
     if (remoteOperation.type === 'DELETE') {
       nextObjects = deleteWhiteboardObject(nextObjects, remoteOperation.objectId);
-    } else {
+    } else if (remoteOperation.payload) {
       nextObjects = updateWhiteboardObject(nextObjects, remoteOperation.payload);
     }
 
@@ -191,10 +195,11 @@ function CanvasBoard({
     const canvas = canvasRef.current;
     if (!canvas) return;
 
-      const freeDrawing = activeTool === 'pen';
+    const freeDrawing = activeTool === 'pen';
     canvas.isDrawingMode = freeDrawing;
     canvas.selection = activeTool === 'select';
-    canvas.defaultCursor = activeTool === 'text' ? 'text' : activeTool === 'eraser' ? 'not-allowed' : freeDrawing ? 'crosshair' : 'default';
+    canvas.defaultCursor =
+      activeTool === 'text' ? 'text' : activeTool === 'eraser' ? 'not-allowed' : freeDrawing ? 'crosshair' : 'default';
 
     canvas.getObjects().forEach((object) => {
       object.selectable = activeTool === 'select';
@@ -212,13 +217,13 @@ function CanvasBoard({
   const addText = useCallback(
     (canvas: Canvas, x: number, y: number) => {
       const text = new IText('Type here', {
-          left: x,
-          top: y,
-          fill: settingsRef.current.color,
-          fontFamily: 'Inter, sans-serif',
-          fontSize: 28,
-          editable: true,
-        });
+        left: x,
+        top: y,
+        fill: settingsRef.current.color,
+        fontFamily: 'Inter, sans-serif',
+        fontSize: 28,
+        editable: true,
+      });
       tagFabricObject(text, 'text');
 
       canvas.add(text);

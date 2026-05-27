@@ -30,16 +30,36 @@ export type WhiteboardObject = {
   createdBy?: string;
   createdAt: number;
   updatedAt: number;
+  deleted?: boolean;
+  deletedAt?: number;
+  deletedBy?: string;
 };
 
-export type BoardOperation = {
+export type OperationType = 'CREATE' | 'UPDATE' | 'DELETE';
+
+export type ClientOperation = {
   opId: string;
   roomId: string;
+  boardId: string;
   objectId: string;
-  type: 'CREATE' | 'UPDATE' | 'DELETE';
-  payload: WhiteboardObject;
+  type: OperationType;
+  payload: WhiteboardObject | null;
+  previousPayload?: WhiteboardObject | null;
   userId: string;
-  timestamp: number;
+  clientTimestamp: number;
+};
+
+export type BoardOperation = ClientOperation & {
+  serverTimestamp: number;
+  sequenceNumber: number;
+};
+
+export type OperationAck = {
+  accepted: boolean;
+  opId: string;
+  operation?: BoardOperation;
+  reason?: string;
+  boardState?: WhiteboardObject[];
 };
 
 export type Participant = {
@@ -47,6 +67,7 @@ export type Participant = {
   name: string;
   socketId: string;
   joinedAt: number;
+  role: 'editor' | 'viewer';
 };
 
 export type CursorPosition = {
