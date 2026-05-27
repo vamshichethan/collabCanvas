@@ -185,6 +185,12 @@ function RoomPage({ roomId }: { roomId: string }) {
     collaboration.clearPermissionError();
   }, [collaboration.permissionError, collaboration.clearPermissionError]);
 
+  useEffect(() => {
+    if (!collaboration.conflictMessage) return;
+    setToast(collaboration.conflictMessage);
+    collaboration.clearConflictMessage();
+  }, [collaboration.conflictMessage, collaboration.clearConflictMessage]);
+
   const copyInviteLink = async () => {
     await navigator.clipboard.writeText(inviteLink);
     setCopied(true);
@@ -274,16 +280,48 @@ function RoomPage({ roomId }: { roomId: string }) {
           <div>
             <h1 className="text-2xl font-semibold tracking-normal text-slate-950">CollabCanvas</h1>
             <p className="text-sm text-slate-500">
-              Room {roomId} · {collaboration.connected ? 'Connected' : 'Reconnecting'}
+              Room {roomId} · {collaboration.syncStatus}
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
+            <div
+              className={[
+                'rounded-lg border px-3 py-2 text-sm font-semibold',
+                collaboration.syncStatus === 'Synced' || collaboration.syncStatus === 'Connected'
+                  ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                  : collaboration.syncStatus === 'Offline'
+                    ? 'border-amber-200 bg-amber-50 text-amber-700'
+                    : 'border-blue-200 bg-blue-50 text-blue-700',
+              ].join(' ')}
+            >
+              {collaboration.syncStatus}
+            </div>
             <div className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-600">
               {collaboration.participants.length} participant{collaboration.participants.length === 1 ? '' : 's'}
             </div>
             <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm font-semibold text-emerald-700">
               Autosaved through sequence {collaboration.lastSeenSequence}
             </div>
+            <div className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-600">
+              {collaboration.pendingOperationCount} pending
+            </div>
+            {collaboration.failedSyncCount ? (
+              <button
+                type="button"
+                onClick={() => void collaboration.manualSync()}
+                className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm font-semibold text-red-700 transition hover:bg-red-100"
+              >
+                Retry failed ({collaboration.failedSyncCount})
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={() => void collaboration.manualSync()}
+                className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+              >
+                Sync now
+              </button>
+            )}
             <button
               type="button"
               onClick={copyInviteLink}
@@ -291,7 +329,7 @@ function RoomPage({ roomId }: { roomId: string }) {
             >
               {copied ? 'Copied' : 'Copy invite'}
             </button>
-            <p className="text-xs font-medium uppercase tracking-[0.18em] text-slate-400">Phase 8</p>
+            <p className="text-xs font-medium uppercase tracking-[0.18em] text-slate-400">Phase 10</p>
           </div>
         </div>
       </header>

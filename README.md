@@ -67,8 +67,11 @@ src/
     useCanvasHistory.ts
     useRoomCollaboration.ts
   lib/
+    connectionStatus.ts
     ids.ts
+    offlineQueue.ts
     room.ts
+    syncManager.ts
     whiteboardObjects.ts
   types.ts
   App.tsx
@@ -182,7 +185,7 @@ The operation log is the authority. `CREATE` adds an object only when the `objec
 
 ## Reconnect Recovery
 
-Clients keep `lastSeenSequenceNumber` in local storage per room. On reconnect they rejoin the room and emit `operation:missed-request` with that number. The backend responds with `operation:missed-response`, containing operations after the requested sequence. If a submitted optimistic operation is rejected, the client rolls back by applying the server-provided board state or requests a full recovery path.
+Clients keep `lastSeenSequenceNumber` in local storage per room. On reconnect they rejoin the room and emit `operation:missed-request` with that number. The backend responds with `operation:missed-response`, containing operations after the requested sequence. The client applies missed remote operations first, then flushes locally queued operations in order with `operation:submit-batch`.
 
 ## Database Persistence
 
@@ -287,3 +290,30 @@ The toolbar Export button opens a modal with PNG, PDF, and JSON options. PNG and
 JSON exports come from `GET /api/boards/:boardId/export/json` because PostgreSQL is the source of truth. The payload includes `boardId`, `roomId`, title, export timestamp, latest sequence number, active objects by default, versions, and optional comments, AI summaries, and deleted/history objects. Each successful export calls `POST /api/boards/:boardId/export/record`, stores a `BoardExport` row, and creates an activity log such as `Vamshi exported board as PDF`.
 
 Owners and editors can export. Viewers can export only when `allowViewerExports` is enabled for the room.
+
+## Offline Sync
+
+Phase 10 adds a small offline-first operation queue in `src/lib/offlineQueue.ts`. Every local drawing operation is applied optimistically to the canvas and stored in IndexedDB with:
+
+```ts
+{
+  localId: string;
+  opId: string;
+  roomId: string;
+  boardId: string;
+  objectId: string;
+  type: 'CREATE' | 'UPDATE' | 'DELETE';
+  payload: WhiteboardObject | null;
+  previousPayload?: WhiteboardObject | null;
+  userId: string;
+  clientTimestamp: number;
+  retryCount: number;
+  status: 'PENDING' | 'SYNCING' | 'SYNCED' | 'FAILED';
+}
+```
+
+Browser `online`/`offline` events and Socket.IO disconnect/reconnect events drive the visible sync status: `Connected`, `Reconnecting`, `Offline`, `Syncing`, or `Synced`. The room header also shows pending operation count, a manual Sync button, and a retry button for failed operations.
+
+When the socket reconnects, the client first requests missed operations after `lastSeenSequenceNumber`, applies server-ordered remote changes, detects object conflicts against local pending edits, and only then submits the remaining local queue with `operation:submit-batch`. The backend validates each operation independently, persists accepted operations through the existing ordered operation log, returns `operation:batch-ack`, and broadcasts accepted operations to the rest of the room.
+
+Conflict handling is intentionally simple: server sequence order wins. If an offline edit touched an object that also changed remotely, the local queued operation is marked `FAILED`, the user sees a conflict notification, and the remote board remains the source of truth. Failed operations are never discarded silently; they remain visible through the retry count/status path.

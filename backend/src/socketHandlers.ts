@@ -117,6 +117,69 @@ export const registerSocketHandlers = (io: Server, socket: Socket, managers: Man
     }
   });
 
+  socket.on(
+    'operation:submit-batch',
+    async (payload: { roomId: string; operations: Array<{ localId: string; operation: ClientOperation }> }) => {
+      const acks: Array<{
+        accepted: boolean;
+        localId: string;
+        opId: string;
+        operation?: Awaited<ReturnType<OperationManager['submit']>>;
+        reason?: string;
+        boardState?: unknown;
+      }> = [];
+
+      socket.emit('sync:status', { status: 'Syncing' });
+
+      for (const item of payload.operations) {
+        try {
+          const reason = await permissions.validateOperation(item.operation);
+          if (reason) {
+            acks.push({
+              accepted: false,
+              localId: item.localId,
+              opId: item.operation.opId,
+              reason,
+            });
+            continue;
+          }
+
+          const appliedOperation = await operations.submit(item.operation);
+          if (appliedOperation.type === 'CREATE' || appliedOperation.type === 'DELETE') {
+            const activityType = appliedOperation.type === 'CREATE' ? 'OBJECT_CREATE' : 'OBJECT_DELETE';
+            const message = `${item.operation.userId} ${appliedOperation.type === 'CREATE' ? 'created' : 'deleted'} an object`;
+            const itemActivity = await activity.create(item.operation.roomId, activityType, message, item.operation.userId);
+            io.to(item.operation.roomId).emit('activity:new', itemActivity);
+          }
+          acks.push({
+            accepted: true,
+            localId: item.localId,
+            opId: item.operation.opId,
+            operation: appliedOperation,
+          });
+          socket.to(item.operation.roomId).emit('operation:applied', appliedOperation);
+        } catch (error) {
+          acks.push({
+            accepted: false,
+            localId: item.localId,
+            opId: item.operation.opId,
+            reason: 'Unable to persist operation',
+          });
+          console.error(error);
+        }
+      }
+
+      const boardState = await operations.getBoardState(payload.roomId);
+      socket.emit('operation:batch-ack', {
+        acks,
+        boardState: boardState.board,
+        lastSequenceNumber: boardState.lastSequenceNumber,
+      });
+      socket.emit('sync:pending-ops', { count: acks.filter((ack) => !ack.accepted).length });
+      socket.emit('sync:status', { status: acks.some((ack) => !ack.accepted) ? 'Reconnecting' : 'Synced' });
+    },
+  );
+
   socket.on('operation:missed-request', async (payload: { roomId: string; boardId?: string; afterSequenceNumber: number }) => {
     const boardId = payload.boardId ?? payload.roomId;
     socket.emit('operation:missed-response', {
@@ -127,6 +190,13 @@ export const registerSocketHandlers = (io: Server, socket: Socket, managers: Man
 
   socket.on('cursor:move', (cursor: CursorPosition) => {
     socket.to(cursor.roomId).emit('cursor:move', cursor);
+  });
+
+  socket.on('operation:conflict', (payload: { roomId: string; objectIds: string[] }) => {
+    socket.emit('operation:conflict', {
+      objectIds: payload.objectIds,
+      message: 'Remote changes won for one or more offline edits.',
+    });
   });
 
   socket.on('participant:invite', async (payload: { roomId: string; actorId: string; userId: string; name: string; role: string }) => {

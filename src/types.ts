@@ -62,6 +62,20 @@ export type OperationAck = {
   boardState?: WhiteboardObject[];
 };
 
+export type QueuedOperationStatus = 'PENDING' | 'SYNCING' | 'SYNCED' | 'FAILED';
+
+export type QueuedOperation = ClientOperation & {
+  localId: string;
+  retryCount: number;
+  status: QueuedOperationStatus;
+};
+
+export type SyncStatus = 'Connected' | 'Reconnecting' | 'Offline' | 'Syncing' | 'Synced';
+
+export type BatchOperationAck = OperationAck & {
+  localId: string;
+};
+
 export type Participant = {
   userId: string;
   name: string;

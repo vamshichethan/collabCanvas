@@ -1,9 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { io, type Socket } from 'socket.io-client';
 import { api } from '../lib/api';
+import { getBrowserOnline, subscribeConnectionStatus } from '../lib/connectionStatus';
 import { createClientId } from '../lib/ids';
+import { offlineQueue } from '../lib/offlineQueue';
+import { findOfflineConflicts, toBatchPayload } from '../lib/syncManager';
 import type {
   ActivityItem,
+  BatchOperationAck,
   BoardOperation,
   ChatMessage,
   ClientOperation,
@@ -11,6 +15,8 @@ import type {
   ObjectComment,
   OperationAck,
   Participant,
+  QueuedOperation,
+  SyncStatus,
   WhiteboardObject,
 } from '../types';
 
@@ -43,6 +49,7 @@ export function useRoomCollaboration(roomId: string) {
   const socketRef = useRef<Socket | null>(null);
   const lastCursorEmit = useRef(0);
   const lastSeenSequenceNumber = useRef(Number(localStorage.getItem(`collabcanvas:${roomId}:lastSequence`) ?? 0));
+  const syncInProgressRef = useRef(false);
   const [participants, setParticipants] = useState<Participant[]>([]);
   const [remoteOperation, setRemoteOperation] = useState<BoardOperation | null>(null);
   const [initialBoard, setInitialBoard] = useState<WhiteboardObject[] | null>(null);
@@ -53,7 +60,19 @@ export function useRoomCollaboration(roomId: string) {
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [comments, setComments] = useState<ObjectComment[]>([]);
   const [activityItems, setActivityItems] = useState<ActivityItem[]>([]);
+  const [browserOnline, setBrowserOnline] = useState(getBrowserOnline);
+  const [syncStatus, setSyncStatus] = useState<SyncStatus>(getBrowserOnline() ? 'Reconnecting' : 'Offline');
+  const [pendingOperationCount, setPendingOperationCount] = useState(0);
+  const [failedSyncCount, setFailedSyncCount] = useState(0);
+  const [conflictMessage, setConflictMessage] = useState<string | null>(null);
   const clearPermissionError = useCallback(() => setPermissionError(null), []);
+  const clearConflictMessage = useCallback(() => setConflictMessage(null), []);
+
+  const refreshPendingCounts = useCallback(async () => {
+    const operations = await offlineQueue.listRoom(roomId);
+    setPendingOperationCount(operations.filter((operation) => operation.status === 'PENDING' || operation.status === 'SYNCING').length);
+    setFailedSyncCount(operations.filter((operation) => operation.status === 'FAILED').length);
+  }, [roomId]);
 
   const markSequenceSeen = useCallback(
     (sequenceNumber: number) => {
@@ -72,6 +91,30 @@ export function useRoomCollaboration(roomId: string) {
       }
     },
     [identity.userId, markSequenceSeen],
+  );
+
+  const submitQueuedOperations = useCallback(
+    async (socket = socketRef.current, includeFailed = false) => {
+      if (!socket?.connected || !browserOnline || syncInProgressRef.current) return;
+
+      const pending = await offlineQueue.listPending(roomId, includeFailed);
+      if (!pending.length) {
+        setSyncStatus('Synced');
+        await refreshPendingCounts();
+        return;
+      }
+
+      syncInProgressRef.current = true;
+      setSyncStatus('Syncing');
+      await offlineQueue.markMany(pending.map((operation) => operation.localId), 'SYNCING');
+      await refreshPendingCounts();
+
+      socket.emit('operation:submit-batch', {
+        roomId,
+        operations: toBatchPayload(pending),
+      });
+    },
+    [browserOnline, refreshPendingCounts, roomId],
   );
 
   useEffect(() => {
@@ -97,6 +140,15 @@ export function useRoomCollaboration(roomId: string) {
   }, [roomId]);
 
   useEffect(() => {
+    void refreshPendingCounts();
+    return subscribeConnectionStatus((online) => {
+      setBrowserOnline(online);
+      setSyncStatus(online ? 'Reconnecting' : 'Offline');
+      if (online) void submitQueuedOperations();
+    });
+  }, [refreshPendingCounts, submitQueuedOperations]);
+
+  useEffect(() => {
     const socket = io(socketUrl, {
       transports: ['websocket'],
       reconnection: true,
@@ -114,6 +166,7 @@ export function useRoomCollaboration(roomId: string) {
 
     socket.on('connect', () => {
       setConnected(true);
+      setSyncStatus('Reconnecting');
       joinRoom();
       socket.emit('operation:missed-request', {
         roomId,
@@ -122,7 +175,11 @@ export function useRoomCollaboration(roomId: string) {
       socket.emit('chat:history', { roomId });
       socket.emit('comment:list', { boardId: roomId });
     });
-    socket.on('disconnect', () => setConnected(false));
+    socket.on('disconnect', () => {
+      setConnected(false);
+      setSyncStatus(getBrowserOnline() ? 'Reconnecting' : 'Offline');
+    });
+    socket.io.on('reconnect_attempt', () => setSyncStatus('Reconnecting'));
     socket.on('room:participants', setParticipants);
     socket.on('permission:error', (payload: { message: string }) => setPermissionError(payload.message));
     socket.on('room:error', (payload: { message: string }) => setPermissionError(payload.message));
@@ -147,10 +204,64 @@ export function useRoomCollaboration(roomId: string) {
     });
     socket.on('operation:applied', applyRemoteOperation);
     socket.on('operation:missed-response', (payload: MissedResponsePayload) => {
-      payload.operations
-        .sort((a, b) => a.sequenceNumber - b.sequenceNumber)
-        .forEach(applyRemoteOperation);
+      void (async () => {
+        const sortedOperations = payload.operations.sort((a, b) => a.sequenceNumber - b.sequenceNumber);
+        const pending = await offlineQueue.listPending(roomId);
+        const conflicts = findOfflineConflicts(pending, sortedOperations);
+        if (conflicts.length) {
+          const conflictIds = new Set(conflicts.map((operation) => operation.objectId));
+          const conflictedLocalOperations = pending.filter((operation) => conflictIds.has(operation.objectId));
+          await offlineQueue.markMany(
+            conflictedLocalOperations.map((operation) => operation.localId),
+            'FAILED',
+            1,
+          );
+          setConflictMessage('Remote changes won for one or more offline edits. Review the board before retrying.');
+          socket.emit('operation:conflict', {
+            roomId,
+            objectIds: Array.from(conflictIds),
+          });
+        }
+
+        sortedOperations.forEach(applyRemoteOperation);
+        markSequenceSeen(payload.lastSequenceNumber);
+        await refreshPendingCounts();
+        await submitQueuedOperations(socket);
+      })();
+    });
+    socket.on('operation:batch-ack', (payload: { acks: BatchOperationAck[]; boardState?: WhiteboardObject[]; lastSequenceNumber?: number }) => {
+      void (async () => {
+        const accepted = payload.acks.filter((ack) => ack.accepted);
+        const rejected = payload.acks.filter((ack) => !ack.accepted);
+        await offlineQueue.markMany(accepted.map((ack) => ack.localId), 'SYNCED');
+        await offlineQueue.markMany(rejected.map((ack) => ack.localId), 'FAILED', 1);
+
+        accepted.forEach((ack) => {
+          if (ack.operation) markSequenceSeen(ack.operation.sequenceNumber);
+        });
+        if (payload.lastSequenceNumber) markSequenceSeen(payload.lastSequenceNumber);
+        if (payload.boardState && rejected.length) {
+          setInitialBoard(payload.boardState);
+        }
+        if (rejected.length) {
+          setPermissionError(rejected[0]?.reason ?? 'Some offline operations failed to sync');
+        }
+
+        syncInProgressRef.current = false;
+        await refreshPendingCounts();
+        const remaining = await offlineQueue.listPending(roomId);
+        setSyncStatus(remaining.length ? 'Reconnecting' : 'Synced');
+      })();
+    });
+    socket.on('operation:conflict', (payload: { message?: string }) => {
+      setConflictMessage(payload.message ?? 'Remote changes won for one or more offline edits.');
+    });
+    socket.on('sync:status', (payload: { status: SyncStatus }) => setSyncStatus(payload.status));
+    socket.on('sync:pending-ops', (payload: { count: number }) => setPendingOperationCount(payload.count));
+    socket.on('board:resync-required', (payload: FullSyncPayload) => {
+      setInitialBoard(payload.board);
       markSequenceSeen(payload.lastSequenceNumber);
+      setSyncStatus('Synced');
     });
     socket.on('cursor:move', (cursor: CursorPosition) => {
       if (cursor.userId === identity.userId) return;
@@ -187,11 +298,22 @@ export function useRoomCollaboration(roomId: string) {
       socket.disconnect();
       socketRef.current = null;
     };
-  }, [applyRemoteOperation, identity.name, identity.role, identity.userId, markSequenceSeen, roomId]);
+  }, [applyRemoteOperation, identity.name, identity.role, identity.userId, markSequenceSeen, refreshPendingCounts, roomId, submitQueuedOperations]);
 
-  const emitOperation = useCallback((operation: ClientOperation) => {
-    socketRef.current?.emit('operation:submit', operation);
-  }, []);
+  const emitOperation = useCallback(
+    (operation: ClientOperation) => {
+      void (async () => {
+        await offlineQueue.enqueue(operation);
+        await refreshPendingCounts();
+        if (!browserOnline || !socketRef.current?.connected) {
+          setSyncStatus(browserOnline ? 'Reconnecting' : 'Offline');
+          return;
+        }
+        await submitQueuedOperations();
+      })();
+    },
+    [browserOnline, refreshPendingCounts, submitQueuedOperations],
+  );
 
   const sendChat = useCallback(
     (message: string) => {
@@ -240,6 +362,8 @@ export function useRoomCollaboration(roomId: string) {
 
   return {
     connected,
+    browserOnline,
+    syncStatus,
     userId: identity.userId,
     userName: identity.name,
     participants,
@@ -251,13 +375,18 @@ export function useRoomCollaboration(roomId: string) {
     comments,
     activityItems,
     lastSeenSequence,
+    pendingOperationCount,
+    failedSyncCount,
+    conflictMessage,
     permissionError,
     clearPermissionError,
+    clearConflictMessage,
     emitOperation,
     emitCursor,
     sendChat,
     addComment,
     resolveComment,
     deleteComment,
+    manualSync: () => submitQueuedOperations(socketRef.current, true),
   };
 }
