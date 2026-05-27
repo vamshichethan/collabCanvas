@@ -1,18 +1,4 @@
-import type { LucideIcon } from 'lucide-react';
-
-export type Tool = 'select' | 'pen' | 'eraser' | 'rectangle' | 'circle' | 'line' | 'text';
 export type WhiteboardObjectType = 'path' | 'rectangle' | 'circle' | 'line' | 'text';
-
-export type DrawingSettings = {
-  color: string;
-  strokeWidth: number;
-};
-
-export type ToolDefinition = {
-  id: Tool;
-  label: string;
-  icon: LucideIcon;
-};
 
 export type WhiteboardObject = {
   id: string;
@@ -32,6 +18,13 @@ export type WhiteboardObject = {
   updatedAt: number;
 };
 
+export type Participant = {
+  userId: string;
+  name: string;
+  socketId: string;
+  joinedAt: number;
+};
+
 export type BoardOperation = {
   opId: string;
   roomId: string;
@@ -40,13 +33,6 @@ export type BoardOperation = {
   payload: WhiteboardObject;
   userId: string;
   timestamp: number;
-};
-
-export type Participant = {
-  userId: string;
-  name: string;
-  socketId: string;
-  joinedAt: number;
 };
 
 export type CursorPosition = {

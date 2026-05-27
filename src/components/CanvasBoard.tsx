@@ -19,6 +19,7 @@ import {
   type TPointerEvent,
 } from 'fabric';
 import { useCanvasHistory } from '../hooks/useCanvasHistory';
+import { createClientId } from '../lib/ids';
 import {
   deleteWhiteboardObject,
   loadCanvasFromObjects,
@@ -26,12 +27,20 @@ import {
   tagFabricObject,
   updateWhiteboardObject,
 } from '../lib/whiteboardObjects';
-import type { DrawingSettings, Tool, WhiteboardObject } from '../types';
+import type { BoardOperation, CursorPosition, DrawingSettings, Tool, WhiteboardObject } from '../types';
 
 type CanvasBoardProps = {
   activeTool: Tool;
   settings: DrawingSettings;
   toolbar: ReactNode;
+  roomId?: string;
+  userId?: string;
+  userName?: string;
+  initialObjects?: WhiteboardObject[] | null;
+  remoteOperation?: BoardOperation | null;
+  remoteCursors?: CursorPosition[];
+  onLocalOperation?: (operation: BoardOperation) => void;
+  onCursorMove?: (x: number, y: number) => void;
 };
 
 type ToolbarHistoryProps = {
@@ -42,7 +51,19 @@ type ToolbarHistoryProps = {
   onClear: () => void;
 };
 
-function CanvasBoard({ activeTool, settings, toolbar }: CanvasBoardProps) {
+function CanvasBoard({
+  activeTool,
+  settings,
+  toolbar,
+  roomId,
+  userId,
+  userName,
+  initialObjects,
+  remoteOperation,
+  remoteCursors = [],
+  onLocalOperation,
+  onCursorMove,
+}: CanvasBoardProps) {
   const canvasElementRef = useRef<HTMLCanvasElement | null>(null);
   const shellRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<Canvas | null>(null);
@@ -57,8 +78,53 @@ function CanvasBoard({ activeTool, settings, toolbar }: CanvasBoardProps) {
   const [showDebugPanel, setShowDebugPanel] = useState(false);
   const { canUndo, canRedo, initializeHistory, saveHistory, undo, redo } = useCanvasHistory();
 
+  const emitOperations = useCallback(
+    (previousObjects: WhiteboardObject[], nextObjects: WhiteboardObject[]) => {
+      if (!roomId || !userId || !onLocalOperation) return;
+
+      const previousById = new Map(previousObjects.map((object) => [object.id, object]));
+      const nextById = new Map(nextObjects.map((object) => [object.id, object]));
+      const timestamp = Date.now();
+
+      nextObjects.forEach((object) => {
+        const previous = previousById.get(object.id);
+        const changed = previous ? JSON.stringify(previous) !== JSON.stringify(object) : true;
+        if (!changed) return;
+
+        onLocalOperation({
+          opId: createClientId('op'),
+          roomId,
+          objectId: object.id,
+          type: previous ? 'UPDATE' : 'CREATE',
+          payload: { ...object, createdBy: object.createdBy ?? userId, updatedAt: timestamp },
+          userId,
+          timestamp,
+        });
+      });
+
+      previousObjects.forEach((object) => {
+        if (nextById.has(object.id)) return;
+
+        onLocalOperation({
+          opId: createClientId('op'),
+          roomId,
+          objectId: object.id,
+          type: 'DELETE',
+          payload: object,
+          userId,
+          timestamp,
+        });
+      });
+    },
+    [onLocalOperation, roomId, userId],
+  );
+
   const commitObjects = useCallback(
-    (nextObjects: WhiteboardObject[], options: { addToHistory?: boolean; render?: boolean } = {}) => {
+    (
+      nextObjects: WhiteboardObject[],
+      options: { addToHistory?: boolean; render?: boolean; emit?: boolean } = {},
+    ) => {
+      const previousObjects = objectsRef.current;
       objectsRef.current = nextObjects;
       setObjects(nextObjects);
 
@@ -72,20 +138,51 @@ function CanvasBoard({ activeTool, settings, toolbar }: CanvasBoardProps) {
         loadCanvasFromObjects(canvas, nextObjects);
         renderingFromStateRef.current = false;
       }
+
+      if (options.emit ?? true) {
+        emitOperations(previousObjects, nextObjects);
+      }
     },
-    [saveHistory],
+    [emitOperations, saveHistory],
   );
 
   const syncObjectsFromCanvas = useCallback(
-    (options: { addToHistory?: boolean } = {}) => {
+    (options: { addToHistory?: boolean; emit?: boolean } = {}) => {
       const canvas = canvasRef.current;
       if (!canvas || renderingFromStateRef.current) return;
 
       const nextObjects = serializeCanvas(canvas);
-      commitObjects(nextObjects, { addToHistory: options.addToHistory });
+      commitObjects(nextObjects, { addToHistory: options.addToHistory, emit: options.emit });
     },
     [commitObjects],
   );
+
+  useEffect(() => {
+    if (!initialObjects) return;
+    objectsRef.current = initialObjects;
+    setObjects(initialObjects);
+    initializeHistory(initialObjects);
+
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    renderingFromStateRef.current = true;
+    loadCanvasFromObjects(canvas, initialObjects);
+    renderingFromStateRef.current = false;
+  }, [initialObjects, initializeHistory]);
+
+  useEffect(() => {
+    if (!remoteOperation || remoteOperation.userId === userId) return;
+
+    let nextObjects = objectsRef.current;
+    if (remoteOperation.type === 'DELETE') {
+      nextObjects = deleteWhiteboardObject(nextObjects, remoteOperation.objectId);
+    } else {
+      nextObjects = updateWhiteboardObject(nextObjects, remoteOperation.payload);
+    }
+
+    commitObjects(nextObjects, { addToHistory: false, render: true, emit: false });
+  }, [commitObjects, remoteOperation, userId]);
 
   useEffect(() => {
     activeToolRef.current = activeTool;
@@ -94,7 +191,7 @@ function CanvasBoard({ activeTool, settings, toolbar }: CanvasBoardProps) {
     const canvas = canvasRef.current;
     if (!canvas) return;
 
-    const freeDrawing = activeTool === 'pen';
+      const freeDrawing = activeTool === 'pen';
     canvas.isDrawingMode = freeDrawing;
     canvas.selection = activeTool === 'select';
     canvas.defaultCursor = activeTool === 'text' ? 'text' : activeTool === 'eraser' ? 'not-allowed' : freeDrawing ? 'crosshair' : 'default';
@@ -194,6 +291,7 @@ function CanvasBoard({ activeTool, settings, toolbar }: CanvasBoardProps) {
 
       const tool = activeToolRef.current;
       const pointer = canvas.getPointer(event.e);
+      onCursorMove?.(pointer.x, pointer.y);
 
       if (tool === 'eraser') {
         eraseTarget(event.e);
@@ -231,6 +329,7 @@ function CanvasBoard({ activeTool, settings, toolbar }: CanvasBoardProps) {
       if (!canvas || !shape || !isDrawingShapeRef.current) return;
 
       const pointer = canvas.getPointer(event.e);
+      onCursorMove?.(pointer.x, pointer.y);
       const origin = originRef.current;
 
       // Shape dimensions are normalized so dragging in any direction creates a valid object model.
@@ -254,7 +353,7 @@ function CanvasBoard({ activeTool, settings, toolbar }: CanvasBoardProps) {
 
       canvas.requestRenderAll();
     },
-    [eraseTarget],
+    [eraseTarget, onCursorMove],
   );
 
   const handleMouseUp = useCallback(() => {
@@ -401,8 +500,20 @@ function CanvasBoard({ activeTool, settings, toolbar }: CanvasBoardProps) {
         ].join(' ')}
       >
         <div className="flex min-h-[68vh] overflow-hidden rounded-[22px] border border-slate-200 bg-white p-2 shadow-board">
-          <div ref={shellRef} className="min-h-[520px] w-full flex-1 overflow-hidden rounded-[18px] bg-white">
+          <div ref={shellRef} className="relative min-h-[520px] w-full flex-1 overflow-hidden rounded-[18px] bg-white">
             <canvas ref={canvasElementRef} />
+            {remoteCursors.map((cursor) => (
+              <div
+                key={cursor.userId}
+                className="pointer-events-none absolute z-10"
+                style={{ transform: `translate(${cursor.x}px, ${cursor.y}px)` }}
+              >
+                <div className="h-3 w-3 rotate-45 rounded-sm bg-blue-600 shadow-sm" />
+                <div className="mt-1 rounded-md bg-blue-600 px-2 py-1 text-xs font-semibold text-white shadow-sm">
+                  {cursor.name}
+                </div>
+              </div>
+            ))}
           </div>
         </div>
 
