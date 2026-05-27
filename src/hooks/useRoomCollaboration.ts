@@ -10,7 +10,7 @@ import type {
   WhiteboardObject,
 } from '../types';
 
-const socketUrl = import.meta.env.VITE_SOCKET_URL ?? 'http://localhost:4000';
+const socketUrl = import.meta.env.VITE_SOCKET_URL ?? 'http://localhost:5000';
 
 type FullSyncPayload = {
   board: WhiteboardObject[];
@@ -44,11 +44,13 @@ export function useRoomCollaboration(roomId: string) {
   const [initialBoard, setInitialBoard] = useState<WhiteboardObject[] | null>(null);
   const [remoteCursors, setRemoteCursors] = useState<Record<string, CursorPosition>>({});
   const [connected, setConnected] = useState(false);
+  const [lastSeenSequence, setLastSeenSequence] = useState(lastSeenSequenceNumber.current);
 
   const markSequenceSeen = useCallback(
     (sequenceNumber: number) => {
       lastSeenSequenceNumber.current = Math.max(lastSeenSequenceNumber.current, sequenceNumber);
       localStorage.setItem(`collabcanvas:${roomId}:lastSequence`, String(lastSeenSequenceNumber.current));
+      setLastSeenSequence(lastSeenSequenceNumber.current);
     },
     [roomId],
   );
@@ -164,6 +166,7 @@ export function useRoomCollaboration(roomId: string) {
     initialBoard,
     remoteOperation,
     remoteCursors: Object.values(remoteCursors),
+    lastSeenSequence,
     emitOperation,
     emitCursor,
   };

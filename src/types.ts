@@ -67,7 +67,7 @@ export type Participant = {
   name: string;
   socketId: string;
   joinedAt: number;
-  role: 'editor' | 'viewer';
+  role: 'owner' | 'editor' | 'viewer';
 };
 
 export type CursorPosition = {
@@ -76,4 +76,34 @@ export type CursorPosition = {
   name: string;
   x: number;
   y: number;
+};
+
+export type BoardVersionRecord = {
+  id: string;
+  boardId: string;
+  name: string;
+  state: unknown;
+  sequenceNumber: number;
+  createdAt: string;
+  createdBy: string;
+};
+
+export type DashboardRoom = {
+  id: string;
+  name: string;
+  inviteCode: string;
+  visibility: 'PUBLIC' | 'PRIVATE';
+  ownerId: string;
+  boards: Array<{
+    id: string;
+    title: string;
+    lastSequenceNumber: number;
+    updatedAt: string;
+  }>;
+  participants: Array<{
+    id: string;
+    userId: string;
+    role: 'OWNER' | 'EDITOR' | 'VIEWER';
+  }>;
+  updatedAt: string;
 };

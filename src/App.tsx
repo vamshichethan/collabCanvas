@@ -1,12 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
-import { io } from 'socket.io-client';
 import CanvasBoard from './components/CanvasBoard';
 import Toolbar from './components/Toolbar';
+import VersionHistoryPanel from './components/VersionHistoryPanel';
 import { getOrCreateIdentity, useRoomCollaboration } from './hooks/useRoomCollaboration';
+import { api } from './lib/api';
 import { getRoomIdFromPath, navigateToRoom } from './lib/room';
-import type { DrawingSettings, Tool } from './types';
-
-const socketUrl = import.meta.env.VITE_SOCKET_URL ?? 'http://localhost:4000';
+import type { DashboardRoom, DrawingSettings, Tool, WhiteboardObject } from './types';
 
 function App() {
   const [roomId, setRoomId] = useState(getRoomIdFromPath());
@@ -17,23 +16,36 @@ function App() {
     return () => window.removeEventListener('popstate', handleRouteChange);
   }, []);
 
-  return roomId ? <RoomPage roomId={roomId} /> : <HomePage />;
+  return roomId ? <RoomPage roomId={roomId} /> : <DashboardPage />;
 }
 
-function HomePage() {
+function DashboardPage() {
+  const identity = useMemo(getOrCreateIdentity, []);
+  const [rooms, setRooms] = useState<DashboardRoom[]>([]);
   const [joinValue, setJoinValue] = useState('');
+  const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
 
-  const createRoom = () => {
-    setCreating(true);
-    const identity = getOrCreateIdentity();
-    const socket = io(socketUrl, { transports: ['websocket'] });
+  const loadRooms = async () => {
+    setLoading(true);
+    try {
+      setRooms(await api.listRooms(identity.userId));
+    } catch {
+      setRooms([]);
+    } finally {
+      setLoading(false);
+    }
+  };
 
-    socket.emit('room:create', identity, (response: { roomId: string }) => {
-      socket.disconnect();
-      setCreating(false);
-      navigateToRoom(response.roomId);
-    });
+  useEffect(() => {
+    void loadRooms();
+  }, []);
+
+  const createRoom = async () => {
+    setCreating(true);
+    const created = await api.createRoom(identity.userId, identity.name);
+    setCreating(false);
+    navigateToRoom(created.room.id);
   };
 
   const joinRoom = () => {
@@ -43,11 +55,14 @@ function HomePage() {
   };
 
   return (
-    <main className="flex min-h-screen items-center justify-center bg-[#f4f7fb] px-4 text-slate-950">
-      <section className="w-full max-w-xl rounded-2xl border border-slate-200 bg-white p-6 shadow-board">
-        <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">CollabCanvas</p>
-        <h1 className="mt-3 text-3xl font-semibold">Create or join a whiteboard room</h1>
-        <div className="mt-6 flex flex-col gap-3 sm:flex-row">
+    <main className="min-h-screen bg-[#f4f7fb] px-4 py-8 text-slate-950">
+      <section className="mx-auto max-w-6xl">
+        <div className="flex flex-col gap-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-board md:flex-row md:items-end md:justify-between">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">CollabCanvas</p>
+            <h1 className="mt-2 text-3xl font-semibold">Dashboard</h1>
+            <p className="mt-1 text-sm text-slate-500">Rooms and persisted boards for {identity.name}</p>
+          </div>
           <button
             type="button"
             onClick={createRoom}
@@ -56,6 +71,9 @@ function HomePage() {
           >
             {creating ? 'Creating...' : 'Create room'}
           </button>
+        </div>
+
+        <div className="mt-4 flex flex-col gap-3 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:flex-row">
           <input
             value={joinValue}
             onChange={(event) => setJoinValue(event.target.value)}
@@ -70,8 +88,31 @@ function HomePage() {
             onClick={joinRoom}
             className="rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
           >
-            Join
+            Join room
           </button>
+        </div>
+
+        <div className="mt-6 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+          {loading ? (
+            <p className="text-sm text-slate-500">Loading rooms...</p>
+          ) : rooms.length === 0 ? (
+            <p className="text-sm text-slate-500">No rooms yet. Create one to start.</p>
+          ) : (
+            rooms.map((room) => (
+              <button
+                type="button"
+                key={room.id}
+                onClick={() => navigateToRoom(room.id)}
+                className="rounded-2xl border border-slate-200 bg-white p-4 text-left shadow-sm transition hover:border-blue-300 hover:shadow-board"
+              >
+                <p className="text-lg font-semibold text-slate-900">{room.name}</p>
+                <p className="mt-1 text-sm text-slate-500">Invite {room.inviteCode}</p>
+                <p className="mt-3 text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">
+                  {room.boards[0]?.lastSequenceNumber ?? 0} operations
+                </p>
+              </button>
+            ))
+          )}
         </div>
       </section>
     </main>
@@ -85,6 +126,7 @@ function RoomPage({ roomId }: { roomId: string }) {
     strokeWidth: 4,
   });
   const [copied, setCopied] = useState(false);
+  const [restoredBoard, setRestoredBoard] = useState<WhiteboardObject[] | null>(null);
   const inviteLink = useMemo(() => `${window.location.origin}/room/${roomId}`, [roomId]);
   const collaboration = useRoomCollaboration(roomId);
 
@@ -92,6 +134,11 @@ function RoomPage({ roomId }: { roomId: string }) {
     await navigator.clipboard.writeText(inviteLink);
     setCopied(true);
     window.setTimeout(() => setCopied(false), 1400);
+  };
+
+  const handleRestore = (objects: WhiteboardObject[], lastSequenceNumber: number) => {
+    setRestoredBoard(objects);
+    localStorage.setItem(`collabcanvas:${roomId}:lastSequence`, String(lastSequenceNumber));
   };
 
   return (
@@ -108,6 +155,9 @@ function RoomPage({ roomId }: { roomId: string }) {
             <div className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-600">
               {collaboration.participants.length} participant{collaboration.participants.length === 1 ? '' : 's'}
             </div>
+            <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm font-semibold text-emerald-700">
+              Autosaved through sequence {collaboration.lastSeenSequence}
+            </div>
             <button
               type="button"
               onClick={copyInviteLink}
@@ -115,19 +165,20 @@ function RoomPage({ roomId }: { roomId: string }) {
             >
               {copied ? 'Copied' : 'Copy invite'}
             </button>
-            <p className="text-xs font-medium uppercase tracking-[0.18em] text-slate-400">Phase 4</p>
+            <p className="text-xs font-medium uppercase tracking-[0.18em] text-slate-400">Phase 5</p>
           </div>
         </div>
       </header>
 
       <div className="mx-auto flex w-full max-w-7xl flex-1 flex-col gap-4 px-3 py-4 md:px-6">
+        <VersionHistoryPanel boardId={roomId} userId={collaboration.userId} onRestore={handleRestore} />
         <CanvasBoard
           activeTool={activeTool}
           settings={settings}
           roomId={roomId}
           userId={collaboration.userId}
           userName={collaboration.userName}
-          initialObjects={collaboration.initialBoard}
+          initialObjects={restoredBoard ?? collaboration.initialBoard}
           remoteOperation={collaboration.remoteOperation}
           remoteCursors={collaboration.remoteCursors}
           onLocalOperation={collaboration.emitOperation}

@@ -26,7 +26,7 @@ export type Participant = {
   name: string;
   socketId: string;
   joinedAt: number;
-  role: 'editor' | 'viewer';
+  role: 'owner' | 'editor' | 'viewer';
 };
 
 export type OperationType = 'CREATE' | 'UPDATE' | 'DELETE';

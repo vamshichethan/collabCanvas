@@ -1,109 +1,43 @@
-import type { BoardOperation, ClientOperation, WhiteboardObject } from './types.js';
-
-type RoomOperations = {
-  nextSequenceNumber: number;
-  log: BoardOperation[];
-  board: Map<string, WhiteboardObject>;
-};
+import { PersistenceManager } from './persistenceManager.js';
+import type { ClientOperation } from './types.js';
 
 export class OperationManager {
-  private rooms = new Map<string, RoomOperations>();
+  private boardCache = new Map<string, Awaited<ReturnType<PersistenceManager['getBoardState']>>>();
 
-  submit(operation: ClientOperation) {
-    const room = this.getRoom(operation.roomId);
-    const serverTimestamp = Date.now();
-    const sequencedOperation: BoardOperation = {
-      ...operation,
-      previousPayload: this.getActiveObject(operation.roomId, operation.objectId),
-      serverTimestamp,
-      sequenceNumber: room.nextSequenceNumber,
-    };
+  constructor(private readonly persistence: PersistenceManager) {}
 
-    room.nextSequenceNumber += 1;
-    room.log.push(sequencedOperation);
-    room.board = this.replay(room.log);
-
-    return sequencedOperation;
+  async submit(operation: ClientOperation) {
+    const result = await this.persistence.submitOperation(operation);
+    this.boardCache.set(operation.boardId, {
+      board: result.board.filter((object) => !object.deleted),
+      lastSequenceNumber: result.operation.sequenceNumber,
+    });
+    return result.operation;
   }
 
-  getBoard(roomId: string) {
-    const room = this.getRoom(roomId);
-    return Array.from(room.board.values()).filter((object) => !object.deleted);
+  async getBoard(boardId: string) {
+    const state = await this.getBoardState(boardId);
+    return state.board;
   }
 
-  getOperationsAfter(roomId: string, sequenceNumber: number) {
-    return this.getRoom(roomId).log.filter((operation) => operation.sequenceNumber > sequenceNumber);
+  async getBoardState(boardId: string) {
+    const cached = this.boardCache.get(boardId);
+    if (cached) return cached;
+
+    const state = await this.persistence.getBoardState(boardId);
+    this.boardCache.set(boardId, state);
+    return state;
   }
 
-  getLastSequenceNumber(roomId: string) {
-    const log = this.getRoom(roomId).log;
-    return log.at(-1)?.sequenceNumber ?? 0;
+  async getOperationsAfter(boardId: string, sequenceNumber: number) {
+    return this.persistence.getOperationsAfter(boardId, sequenceNumber);
   }
 
-  private replay(log: BoardOperation[]) {
-    const board = new Map<string, WhiteboardObject>();
-
-    log
-      .slice()
-      .sort((a, b) => a.sequenceNumber - b.sequenceNumber)
-      .forEach((operation) => this.applySequencedOperation(board, operation));
-
-    return board;
+  async getLastSequenceNumber(boardId: string) {
+    return (await this.getBoardState(boardId)).lastSequenceNumber;
   }
 
-  private applySequencedOperation(board: Map<string, WhiteboardObject>, operation: BoardOperation) {
-    const existing = board.get(operation.objectId);
-
-    if (operation.type === 'CREATE') {
-      if (!existing && operation.payload) {
-        board.set(operation.objectId, {
-          ...operation.payload,
-          updatedAt: operation.serverTimestamp,
-          deleted: false,
-        });
-      }
-      return;
-    }
-
-    if (operation.type === 'UPDATE') {
-      if (existing && !existing.deleted && operation.payload) {
-        board.set(operation.objectId, {
-          ...existing,
-          ...operation.payload,
-          id: operation.objectId,
-          createdAt: existing.createdAt,
-          updatedAt: operation.serverTimestamp,
-          deleted: false,
-        });
-      }
-      return;
-    }
-
-    if (operation.type === 'DELETE' && existing && !existing.deleted) {
-      board.set(operation.objectId, {
-        ...existing,
-        deleted: true,
-        deletedAt: operation.serverTimestamp,
-        deletedBy: operation.userId,
-        updatedAt: operation.serverTimestamp,
-      });
-    }
-  }
-
-  private getActiveObject(roomId: string, objectId: string) {
-    const object = this.getRoom(roomId).board.get(objectId);
-    return object && !object.deleted ? object : null;
-  }
-
-  private getRoom(roomId: string) {
-    if (!this.rooms.has(roomId)) {
-      this.rooms.set(roomId, {
-        nextSequenceNumber: 1,
-        log: [],
-        board: new Map(),
-      });
-    }
-
-    return this.rooms.get(roomId)!;
+  invalidateBoard(boardId: string) {
+    this.boardCache.delete(boardId);
   }
 }

@@ -16,24 +16,30 @@ The frontend runs at `http://localhost:5173`.
 ```bash
 cd backend
 npm install
+npm run prisma:generate
+npm run prisma:migrate
+npm run seed
 npm run dev
 ```
 
-The backend runs at `http://localhost:4000`.
+The backend runs at `http://localhost:5000`.
 
 ## Environment
 
 Root `.env`:
 
 ```bash
-VITE_SOCKET_URL=http://localhost:4000
+VITE_SOCKET_URL=http://localhost:5000
+VITE_API_URL=http://localhost:5000
 ```
 
 Backend `.env`:
 
 ```bash
-PORT=4000
-CLIENT_ORIGIN=http://localhost:5173
+DATABASE_URL=""
+FRONTEND_URL="http://localhost:5173"
+CLIENT_ORIGIN="http://localhost:5173"
+PORT=5000
 ```
 
 ## Build Commands
@@ -64,9 +70,15 @@ src/
   main.tsx
   index.css
 backend/
+  prisma/
+    schema.prisma
+    seed.ts
   src/
+    apiRoutes.ts
     operationManager.ts
+    persistenceManager.ts
     permissionManager.ts
+    prisma.ts
     roomManager.ts
     server.ts
     socketHandlers.ts
@@ -94,6 +106,9 @@ type WhiteboardObject = {
   createdBy?: string;
   createdAt: number;
   updatedAt: number;
+  deleted?: boolean;
+  deletedAt?: number;
+  deletedBy?: string;
 };
 ```
 
@@ -152,3 +167,36 @@ The operation log is the authority. `CREATE` adds an object only when the `objec
 ## Reconnect Recovery
 
 Clients keep `lastSeenSequenceNumber` in local storage per room. On reconnect they rejoin the room and emit `operation:missed-request` with that number. The backend responds with `operation:missed-response`, containing operations after the requested sequence. If a submitted optimistic operation is rejected, the client rolls back by applying the server-provided board state or requests a full recovery path.
+
+## Database Persistence
+
+PostgreSQL with Prisma is the source of truth. In-memory room and board state is only a cache for active Socket.IO sessions. Accepted operations are saved in a transaction with the board `currentState` and `lastSequenceNumber`, so server restarts can restore the board from the database.
+
+Prisma models live in `backend/prisma/schema.prisma`:
+
+- `User`
+- `Room`
+- `Board`
+- `Participant`
+- `DrawingOperation`
+- `BoardSnapshot`
+- `BoardVersion`
+- `Comment`
+- `ChatMessage`
+
+Use Neon PostgreSQL or Supabase PostgreSQL by putting the connection string in `backend/.env` as `DATABASE_URL`.
+
+## API Routes
+
+- `POST /api/rooms` creates a persisted room, board, owner participant, and invite code.
+- `GET /api/rooms/:roomId` returns room details, boards, and participants.
+- `POST /api/rooms/:roomId/join` persists participant membership.
+- `GET /api/boards/:boardId` returns the persisted board state and latest sequence.
+- `GET /api/boards/:boardId/versions` lists named versions.
+- `POST /api/boards/:boardId/versions` creates a named version from the current board state.
+- `POST /api/boards/:boardId/restore/:versionId` restores a named version and records a snapshot.
+- `GET /api/boards/:boardId/snapshots` lists autosave and restore snapshots.
+
+## Snapshots And Versions
+
+Autosave snapshots are created every 25 accepted drawing operations. Each snapshot stores the full board state, sequence number, creation time, and creator. Named versions are user-created snapshots with a display name. Restoring a version updates `Board.currentState`, advances the board sequence, and creates a restore snapshot.

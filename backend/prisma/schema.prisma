@@ -1,0 +1,176 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum RoomVisibility {
+  PUBLIC
+  PRIVATE
+}
+
+enum ParticipantRole {
+  OWNER
+  EDITOR
+  VIEWER
+}
+
+enum OperationType {
+  CREATE
+  UPDATE
+  DELETE
+}
+
+model User {
+  id           String             @id
+  name         String
+  email        String?            @unique
+  avatarUrl    String?
+  createdAt    DateTime           @default(now())
+  ownedRooms   Room[]             @relation("RoomOwner")
+  participants Participant[]
+  operations   DrawingOperation[]
+  snapshots    BoardSnapshot[]
+  versions     BoardVersion[]
+  comments     Comment[]
+  chatMessages ChatMessage[]
+
+  @@index([email])
+}
+
+model Room {
+  id           String             @id
+  name         String
+  inviteCode   String             @unique
+  visibility   RoomVisibility     @default(PRIVATE)
+  ownerId      String
+  owner        User               @relation("RoomOwner", fields: [ownerId], references: [id])
+  boards       Board[]
+  participants Participant[]
+  operations   DrawingOperation[]
+  chatMessages ChatMessage[]
+  createdAt    DateTime           @default(now())
+  updatedAt    DateTime           @updatedAt
+
+  @@index([ownerId])
+  @@index([inviteCode])
+}
+
+model Board {
+  id                 String             @id
+  roomId             String
+  room               Room               @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  title              String
+  currentState       Json               @default("[]")
+  lastSequenceNumber Int                @default(0)
+  operations         DrawingOperation[]
+  snapshots          BoardSnapshot[]
+  versions           BoardVersion[]
+  comments           Comment[]
+  createdAt          DateTime           @default(now())
+  updatedAt          DateTime           @updatedAt
+
+  @@index([roomId])
+}
+
+model Participant {
+  id       String          @id @default(cuid())
+  roomId   String
+  userId   String
+  role     ParticipantRole @default(EDITOR)
+  joinedAt DateTime        @default(now())
+  room     Room            @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  user     User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([roomId, userId])
+  @@index([roomId])
+  @@index([userId])
+}
+
+model DrawingOperation {
+  id              String        @id @default(cuid())
+  opId            String        @unique
+  roomId          String
+  boardId         String
+  objectId        String
+  type            OperationType
+  payload         Json?
+  previousPayload Json?
+  userId          String
+  clientTimestamp DateTime
+  serverTimestamp DateTime
+  sequenceNumber  Int
+  room            Room          @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  board           Board         @relation(fields: [boardId], references: [id], onDelete: Cascade)
+  user            User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([boardId, sequenceNumber])
+  @@index([roomId])
+  @@index([boardId])
+  @@index([sequenceNumber])
+  @@index([opId])
+  @@index([userId])
+}
+
+model BoardSnapshot {
+  id             String   @id @default(cuid())
+  boardId        String
+  state          Json
+  sequenceNumber Int
+  createdAt      DateTime @default(now())
+  createdBy      String
+  board          Board    @relation(fields: [boardId], references: [id], onDelete: Cascade)
+  creator        User     @relation(fields: [createdBy], references: [id])
+
+  @@index([boardId])
+  @@index([sequenceNumber])
+  @@index([createdBy])
+}
+
+model BoardVersion {
+  id             String   @id @default(cuid())
+  boardId        String
+  name           String
+  state          Json
+  sequenceNumber Int
+  createdAt      DateTime @default(now())
+  createdBy      String
+  board          Board    @relation(fields: [boardId], references: [id], onDelete: Cascade)
+  creator        User     @relation(fields: [createdBy], references: [id])
+
+  @@index([boardId])
+  @@index([sequenceNumber])
+  @@index([createdBy])
+}
+
+model Comment {
+  id        String   @id @default(cuid())
+  boardId   String
+  objectId  String?
+  userId    String
+  message   String
+  createdAt DateTime @default(now())
+  resolved  Boolean  @default(false)
+  board     Board    @relation(fields: [boardId], references: [id], onDelete: Cascade)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([boardId])
+  @@index([objectId])
+  @@index([userId])
+}
+
+model ChatMessage {
+  id        String   @id @default(cuid())
+  roomId    String
+  userId    String
+  message   String
+  createdAt DateTime @default(now())
+  room      Room     @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([roomId])
+  @@index([userId])
+}
