@@ -1,4 +1,13 @@
-import { cloneElement, isValidElement, type ReactElement, type ReactNode, useCallback, useEffect, useRef } from 'react';
+import {
+  cloneElement,
+  isValidElement,
+  type ReactElement,
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from 'react';
 import {
   Canvas,
   Circle,
@@ -10,15 +19,20 @@ import {
   type TPointerEvent,
 } from 'fabric';
 import { useCanvasHistory } from '../hooks/useCanvasHistory';
-import type { DrawingSettings, Tool } from '../types';
+import {
+  deleteWhiteboardObject,
+  loadCanvasFromObjects,
+  serializeCanvas,
+  tagFabricObject,
+  updateWhiteboardObject,
+} from '../lib/whiteboardObjects';
+import type { DrawingSettings, Tool, WhiteboardObject } from '../types';
 
 type CanvasBoardProps = {
   activeTool: Tool;
   settings: DrawingSettings;
   toolbar: ReactNode;
 };
-
-const ERASER_COLOR = '#ffffff';
 
 type ToolbarHistoryProps = {
   canUndo: boolean;
@@ -34,10 +48,44 @@ function CanvasBoard({ activeTool, settings, toolbar }: CanvasBoardProps) {
   const canvasRef = useRef<Canvas | null>(null);
   const activeToolRef = useRef(activeTool);
   const settingsRef = useRef(settings);
+  const objectsRef = useRef<WhiteboardObject[]>([]);
   const shapeRef = useRef<FabricObject | Line | null>(null);
   const originRef = useRef({ x: 0, y: 0 });
   const isDrawingShapeRef = useRef(false);
-  const { canUndo, canRedo, initializeHistory, saveHistory: recordHistory, undo, redo } = useCanvasHistory();
+  const renderingFromStateRef = useRef(false);
+  const [objects, setObjects] = useState<WhiteboardObject[]>([]);
+  const [showDebugPanel, setShowDebugPanel] = useState(false);
+  const { canUndo, canRedo, initializeHistory, saveHistory, undo, redo } = useCanvasHistory();
+
+  const commitObjects = useCallback(
+    (nextObjects: WhiteboardObject[], options: { addToHistory?: boolean; render?: boolean } = {}) => {
+      objectsRef.current = nextObjects;
+      setObjects(nextObjects);
+
+      if (options.addToHistory ?? true) {
+        saveHistory(nextObjects);
+      }
+
+      const canvas = canvasRef.current;
+      if (options.render && canvas) {
+        renderingFromStateRef.current = true;
+        loadCanvasFromObjects(canvas, nextObjects);
+        renderingFromStateRef.current = false;
+      }
+    },
+    [saveHistory],
+  );
+
+  const syncObjectsFromCanvas = useCallback(
+    (options: { addToHistory?: boolean } = {}) => {
+      const canvas = canvasRef.current;
+      if (!canvas || renderingFromStateRef.current) return;
+
+      const nextObjects = serializeCanvas(canvas);
+      commitObjects(nextObjects, { addToHistory: options.addToHistory });
+    },
+    [commitObjects],
+  );
 
   useEffect(() => {
     activeToolRef.current = activeTool;
@@ -46,48 +94,44 @@ function CanvasBoard({ activeTool, settings, toolbar }: CanvasBoardProps) {
     const canvas = canvasRef.current;
     if (!canvas) return;
 
-    const freeDrawing = activeTool === 'pen' || activeTool === 'eraser';
+    const freeDrawing = activeTool === 'pen';
     canvas.isDrawingMode = freeDrawing;
     canvas.selection = activeTool === 'select';
-    canvas.defaultCursor = activeTool === 'text' ? 'text' : freeDrawing ? 'crosshair' : 'default';
+    canvas.defaultCursor = activeTool === 'text' ? 'text' : activeTool === 'eraser' ? 'not-allowed' : freeDrawing ? 'crosshair' : 'default';
 
     canvas.getObjects().forEach((object) => {
       object.selectable = activeTool === 'select';
-      object.evented = activeTool === 'select';
+      object.evented = activeTool === 'select' || activeTool === 'eraser';
     });
 
     if (freeDrawing) {
       const brush = new PencilBrush(canvas);
-      brush.color = activeTool === 'eraser' ? ERASER_COLOR : settings.color;
-      brush.width = activeTool === 'eraser' ? settings.strokeWidth * 2.5 : settings.strokeWidth;
+      brush.color = settings.color;
+      brush.width = settings.strokeWidth;
       canvas.freeDrawingBrush = brush;
     }
   }, [activeTool, settings]);
 
-  const saveHistory = useCallback(() => {
-    const canvas = canvasRef.current;
-    if (canvas) recordHistory(canvas);
-  }, [recordHistory]);
-
   const addText = useCallback(
     (canvas: Canvas, x: number, y: number) => {
       const text = new IText('Type here', {
-        left: x,
-        top: y,
-        fill: settingsRef.current.color,
-        fontFamily: 'Inter, sans-serif',
-        fontSize: 28,
-        editable: true,
-      });
+          left: x,
+          top: y,
+          fill: settingsRef.current.color,
+          fontFamily: 'Inter, sans-serif',
+          fontSize: 28,
+          editable: true,
+        });
+      tagFabricObject(text, 'text');
 
       canvas.add(text);
       canvas.setActiveObject(text);
       canvas.requestRenderAll();
       text.enterEditing();
       text.selectAll();
-      saveHistory();
+      syncObjectsFromCanvas();
     },
-    [saveHistory],
+    [syncObjectsFromCanvas],
   );
 
   const createShape = useCallback((tool: Tool, x: number, y: number) => {
@@ -102,24 +146,46 @@ function CanvasBoard({ activeTool, settings, toolbar }: CanvasBoardProps) {
     };
 
     if (tool === 'rectangle') {
-      return new Rect({ ...common, width: 1, height: 1 });
+      return tagFabricObject(new Rect({ ...common, width: 1, height: 1 }), 'rectangle');
     }
 
     if (tool === 'circle') {
-      return new Circle({ ...common, radius: 1 });
+      return tagFabricObject(new Circle({ ...common, radius: 1 }), 'circle');
     }
 
     if (tool === 'line') {
-      return new Line([x, y, x, y], {
-        stroke: settingsRef.current.color,
-        strokeWidth: settingsRef.current.strokeWidth,
-        selectable: false,
-        evented: false,
-      });
+      return tagFabricObject(
+        new Line([x, y, x, y], {
+          stroke: settingsRef.current.color,
+          strokeWidth: settingsRef.current.strokeWidth,
+          selectable: false,
+          evented: false,
+        }),
+        'line',
+      );
     }
 
     return null;
   }, []);
+
+  const eraseTarget = useCallback(
+    (event: TPointerEvent) => {
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+
+      const target = canvas.findTarget(event);
+      const targetId = target ? (target as FabricObject & { whiteboardId?: string }).whiteboardId : undefined;
+      if (!target || !targetId) return;
+
+      canvas.remove(target);
+      canvas.discardActiveObject();
+      canvas.requestRenderAll();
+
+      const nextObjects = deleteWhiteboardObject(objectsRef.current, targetId);
+      commitObjects(nextObjects);
+    },
+    [commitObjects],
+  );
 
   const handleMouseDown = useCallback(
     (event: { e: TPointerEvent }) => {
@@ -128,6 +194,11 @@ function CanvasBoard({ activeTool, settings, toolbar }: CanvasBoardProps) {
 
       const tool = activeToolRef.current;
       const pointer = canvas.getPointer(event.e);
+
+      if (tool === 'eraser') {
+        eraseTarget(event.e);
+        return;
+      }
 
       if (tool === 'text') {
         addText(canvas, pointer.x, pointer.y);
@@ -144,38 +215,47 @@ function CanvasBoard({ activeTool, settings, toolbar }: CanvasBoardProps) {
       isDrawingShapeRef.current = true;
       canvas.add(shape);
     },
-    [addText, createShape],
+    [addText, createShape, eraseTarget],
   );
 
-  const handleMouseMove = useCallback((event: { e: TPointerEvent }) => {
-    const canvas = canvasRef.current;
-    const shape = shapeRef.current;
-    if (!canvas || !shape || !isDrawingShapeRef.current) return;
+  const handleMouseMove = useCallback(
+    (event: { e: TPointerEvent }) => {
+      const canvas = canvasRef.current;
+      const shape = shapeRef.current;
 
-    const pointer = canvas.getPointer(event.e);
-    const origin = originRef.current;
+      if (activeToolRef.current === 'eraser') {
+        eraseTarget(event.e);
+        return;
+      }
 
-    // Shape dimensions are normalized so dragging in any direction feels natural.
-    if (shape instanceof Rect) {
-      shape.set({
-        left: Math.min(origin.x, pointer.x),
-        top: Math.min(origin.y, pointer.y),
-        width: Math.abs(pointer.x - origin.x),
-        height: Math.abs(pointer.y - origin.y),
-      });
-    } else if (shape instanceof Circle) {
-      const radius = Math.hypot(pointer.x - origin.x, pointer.y - origin.y) / 2;
-      shape.set({
-        left: Math.min(origin.x, pointer.x),
-        top: Math.min(origin.y, pointer.y),
-        radius,
-      });
-    } else if (shape instanceof Line) {
-      shape.set({ x2: pointer.x, y2: pointer.y });
-    }
+      if (!canvas || !shape || !isDrawingShapeRef.current) return;
 
-    canvas.requestRenderAll();
-  }, []);
+      const pointer = canvas.getPointer(event.e);
+      const origin = originRef.current;
+
+      // Shape dimensions are normalized so dragging in any direction creates a valid object model.
+      if (shape instanceof Rect) {
+        shape.set({
+          left: Math.min(origin.x, pointer.x),
+          top: Math.min(origin.y, pointer.y),
+          width: Math.abs(pointer.x - origin.x),
+          height: Math.abs(pointer.y - origin.y),
+        });
+      } else if (shape instanceof Circle) {
+        const radius = Math.hypot(pointer.x - origin.x, pointer.y - origin.y) / 2;
+        shape.set({
+          left: Math.min(origin.x, pointer.x),
+          top: Math.min(origin.y, pointer.y),
+          radius,
+        });
+      } else if (shape instanceof Line) {
+        shape.set({ x2: pointer.x, y2: pointer.y });
+      }
+
+      canvas.requestRenderAll();
+    },
+    [eraseTarget],
+  );
 
   const handleMouseUp = useCallback(() => {
     const canvas = canvasRef.current;
@@ -187,8 +267,8 @@ function CanvasBoard({ activeTool, settings, toolbar }: CanvasBoardProps) {
     shapeRef.current = null;
     isDrawingShapeRef.current = false;
     canvas.setActiveObject(shape);
-    saveHistory();
-  }, [saveHistory]);
+    syncObjectsFromCanvas();
+  }, [syncObjectsFromCanvas]);
 
   useEffect(() => {
     const element = canvasElementRef.current;
@@ -219,18 +299,30 @@ function CanvasBoard({ activeTool, settings, toolbar }: CanvasBoardProps) {
     canvas.on('mouse:down', handleMouseDown);
     canvas.on('mouse:move', handleMouseMove);
     canvas.on('mouse:up', handleMouseUp);
-    canvas.on('path:created', saveHistory);
-    canvas.on('object:modified', saveHistory);
-    canvas.on('text:changed', saveHistory);
+    canvas.on('path:created', (event) => {
+      if (event.path) tagFabricObject(event.path, 'path');
+      syncObjectsFromCanvas();
+    });
+    canvas.on('object:modified', (event) => {
+      if (!event.target) return;
+      const updatedObject = serializeCanvas(canvas).find(
+        (object) => object.id === (event.target as FabricObject & { whiteboardId?: string }).whiteboardId,
+      );
+      if (!updatedObject) return;
 
-    initializeHistory(canvas);
+      const nextObjects = updateWhiteboardObject(objectsRef.current, updatedObject);
+      commitObjects(nextObjects);
+    });
+    canvas.on('text:changed', () => syncObjectsFromCanvas());
+
+    initializeHistory([]);
 
     return () => {
       observer.disconnect();
       canvas.dispose();
       canvasRef.current = null;
     };
-  }, [handleMouseDown, handleMouseMove, handleMouseUp, initializeHistory, saveHistory]);
+  }, [commitObjects, handleMouseDown, handleMouseMove, handleMouseUp, initializeHistory, syncObjectsFromCanvas]);
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -238,42 +330,41 @@ function CanvasBoard({ activeTool, settings, toolbar }: CanvasBoardProps) {
       if (!canvas) return;
 
       const target = event.target as HTMLElement | null;
-      if (target?.tagName === 'INPUT' || target?.tagName === 'SELECT') return;
+      if (target?.tagName === 'INPUT' || target?.tagName === 'SELECT' || target?.tagName === 'TEXTAREA') return;
 
       if (event.key === 'Delete' || event.key === 'Backspace') {
         const selected = canvas.getActiveObjects();
         if (!selected.length) return;
 
-        selected.forEach((object) => canvas.remove(object));
+        let nextObjects = objectsRef.current;
+        selected.forEach((object) => {
+          const objectId = (object as FabricObject & { whiteboardId?: string }).whiteboardId;
+          canvas.remove(object);
+          if (objectId) nextObjects = deleteWhiteboardObject(nextObjects, objectId);
+        });
         canvas.discardActiveObject();
         canvas.requestRenderAll();
-        saveHistory();
+        commitObjects(nextObjects);
       }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [saveHistory]);
+  }, [commitObjects]);
 
   const handleUndo = useCallback(() => {
-    const canvas = canvasRef.current;
-    if (canvas) void undo(canvas);
-  }, [undo]);
+    const previousObjects = undo();
+    if (previousObjects) commitObjects(previousObjects, { addToHistory: false, render: true });
+  }, [commitObjects, undo]);
 
   const handleRedo = useCallback(() => {
-    const canvas = canvasRef.current;
-    if (canvas) void redo(canvas);
-  }, [redo]);
+    const nextObjects = redo();
+    if (nextObjects) commitObjects(nextObjects, { addToHistory: false, render: true });
+  }, [commitObjects, redo]);
 
   const handleClear = useCallback(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-
-    canvas.getObjects().forEach((object) => canvas.remove(object));
-    canvas.discardActiveObject();
-    canvas.requestRenderAll();
-    saveHistory();
-  }, [saveHistory]);
+    commitObjects([], { render: true });
+  }, [commitObjects]);
 
   const enhancedToolbar = isValidElement(toolbar)
     ? cloneElement(toolbar as ReactElement<Partial<ToolbarHistoryProps>>, {
@@ -287,11 +378,44 @@ function CanvasBoard({ activeTool, settings, toolbar }: CanvasBoardProps) {
 
   return (
     <section className="flex min-h-0 flex-1 flex-col gap-4">
-      {enhancedToolbar}
-      <div className="flex min-h-[68vh] flex-1 overflow-hidden rounded-[22px] border border-slate-200 bg-white p-2 shadow-board">
-        <div ref={shellRef} className="min-h-[520px] w-full flex-1 overflow-hidden rounded-[18px] bg-white">
-          <canvas ref={canvasElementRef} />
+      <div className="flex flex-col gap-3">
+        {enhancedToolbar}
+        <div className="flex items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-sm">
+          <p className="text-sm font-medium text-slate-600">
+            {objects.length} structured object{objects.length === 1 ? '' : 's'}
+          </p>
+          <button
+            type="button"
+            onClick={() => setShowDebugPanel((current) => !current)}
+            className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 transition hover:border-slate-300 hover:bg-slate-50"
+          >
+            {showDebugPanel ? 'Hide JSON' : 'Show JSON'}
+          </button>
         </div>
+      </div>
+
+      <div
+        className={[
+          'grid min-h-0 flex-1 gap-4',
+          showDebugPanel ? 'xl:grid-cols-[minmax(0,1fr)_420px]' : 'grid-cols-1',
+        ].join(' ')}
+      >
+        <div className="flex min-h-[68vh] overflow-hidden rounded-[22px] border border-slate-200 bg-white p-2 shadow-board">
+          <div ref={shellRef} className="min-h-[520px] w-full flex-1 overflow-hidden rounded-[18px] bg-white">
+            <canvas ref={canvasElementRef} />
+          </div>
+        </div>
+
+        {showDebugPanel ? (
+          <aside className="max-h-[68vh] overflow-hidden rounded-2xl border border-slate-200 bg-slate-950 shadow-board">
+            <div className="border-b border-white/10 px-4 py-3 text-sm font-semibold text-slate-100">
+              Board Objects JSON
+            </div>
+            <pre className="h-full overflow-auto p-4 text-xs leading-relaxed text-emerald-100">
+              {JSON.stringify(objects, null, 2)}
+            </pre>
+          </aside>
+        ) : null}
       </div>
     </section>
   );

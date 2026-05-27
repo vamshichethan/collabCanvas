@@ -1,49 +1,40 @@
 import { useCallback, useRef, useState } from 'react';
-import type { Canvas } from 'fabric';
+import { cloneWhiteboardObjects } from '../lib/whiteboardObjects';
+import type { WhiteboardObject } from '../types';
 
 type HistoryControls = {
   canUndo: boolean;
   canRedo: boolean;
-  initializeHistory: (canvas: Canvas) => void;
-  saveHistory: (canvas: Canvas) => void;
-  undo: (canvas: Canvas) => Promise<void>;
-  redo: (canvas: Canvas) => Promise<void>;
+  initializeHistory: (objects: WhiteboardObject[]) => void;
+  saveHistory: (objects: WhiteboardObject[]) => void;
+  undo: () => WhiteboardObject[] | null;
+  redo: () => WhiteboardObject[] | null;
 };
 
 export function useCanvasHistory(): HistoryControls {
-  const undoStack = useRef<string[]>([]);
-  const redoStack = useRef<string[]>([]);
-  const restoring = useRef(false);
+  const undoStack = useRef<WhiteboardObject[][]>([]);
+  const redoStack = useRef<WhiteboardObject[][]>([]);
   const [version, setVersion] = useState(0);
 
   const refresh = useCallback(() => setVersion((current) => current + 1), []);
 
-  const serialize = useCallback((canvas: Canvas) => JSON.stringify(canvas.toJSON()), []);
-
-  const loadState = useCallback(async (canvas: Canvas, state: string) => {
-    restoring.current = true;
-    await canvas.loadFromJSON(JSON.parse(state));
-    canvas.requestRenderAll();
-    restoring.current = false;
-  }, []);
+  const serialize = useCallback((objects: WhiteboardObject[]) => JSON.stringify(objects), []);
 
   const initializeHistory = useCallback(
-    (canvas: Canvas) => {
-      undoStack.current = [serialize(canvas)];
+    (objects: WhiteboardObject[]) => {
+      undoStack.current = [cloneWhiteboardObjects(objects)];
       redoStack.current = [];
       refresh();
     },
-    [refresh, serialize],
+    [refresh],
   );
 
   const saveHistory = useCallback(
-    (canvas: Canvas) => {
-      if (restoring.current) return;
-
-      const snapshot = serialize(canvas);
+    (objects: WhiteboardObject[]) => {
+      const snapshot = cloneWhiteboardObjects(objects);
       const latest = undoStack.current[undoStack.current.length - 1];
 
-      if (snapshot !== latest) {
+      if (serialize(snapshot) !== serialize(latest ?? [])) {
         undoStack.current.push(snapshot);
         redoStack.current = [];
         refresh();
@@ -52,31 +43,25 @@ export function useCanvasHistory(): HistoryControls {
     [refresh, serialize],
   );
 
-  const undo = useCallback(
-    async (canvas: Canvas) => {
-      if (undoStack.current.length <= 1) return;
+  const undo = useCallback(() => {
+    if (undoStack.current.length <= 1) return null;
 
-      const current = undoStack.current.pop();
-      if (current) redoStack.current.push(current);
+    const current = undoStack.current.pop();
+    if (current) redoStack.current.push(current);
 
-      const previous = undoStack.current[undoStack.current.length - 1];
-      await loadState(canvas, previous);
-      refresh();
-    },
-    [loadState, refresh],
-  );
+    const previous = cloneWhiteboardObjects(undoStack.current[undoStack.current.length - 1]);
+    refresh();
+    return previous;
+  }, [refresh]);
 
-  const redo = useCallback(
-    async (canvas: Canvas) => {
-      const next = redoStack.current.pop();
-      if (!next) return;
+  const redo = useCallback(() => {
+    const next = redoStack.current.pop();
+    if (!next) return null;
 
-      undoStack.current.push(next);
-      await loadState(canvas, next);
-      refresh();
-    },
-    [loadState, refresh],
-  );
+    undoStack.current.push(next);
+    refresh();
+    return cloneWhiteboardObjects(next);
+  }, [refresh]);
 
   return {
     canUndo: undoStack.current.length > 1,

@@ -21,7 +21,7 @@ function App() {
             <p className="text-sm text-slate-500">Frontend whiteboard workspace</p>
           </div>
           <p className="text-xs font-medium uppercase tracking-[0.18em] text-slate-400">
-            Phase 1
+            Phase 2
           </p>
         </div>
       </header>
