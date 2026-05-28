@@ -28,6 +28,14 @@ flowchart LR
 - Dashboard board lifecycle, invite management, thumbnails, exports, chat, object comments, activity feed, and Gemini summaries.
 - Production hardening with validation, logging, security middleware, tests, Docker, and deployment documentation.
 
+## Production Deployment
+
+- Frontend: <https://collabcanvas-eight.vercel.app>
+- Backend: <https://collabcanvas-backend-o0ft.onrender.com>
+- Health check: <https://collabcanvas-backend-o0ft.onrender.com/api/health>
+
+The current production stack uses Vercel for the Vite frontend, Render for the Express/Socket.IO backend, Neon PostgreSQL for persistence, Upstash Redis for Socket.IO scaling/presence/rate limits, and Gemini for AI summaries.
+
 ## Frontend Setup
 
 ```bash
@@ -80,6 +88,21 @@ REDIS_PORT=""
 REDIS_PASSWORD=""
 REDIS_TLS=""
 INSTANCE_ID=""
+```
+
+For production, set `FRONTEND_URL`, `CLIENT_ORIGIN`, and `CORS_ORIGINS` to the deployed Vercel origin. Set root Vite variables to the deployed Render backend:
+
+```bash
+VITE_API_URL=https://collabcanvas-backend-o0ft.onrender.com
+VITE_SOCKET_URL=https://collabcanvas-backend-o0ft.onrender.com
+```
+
+When using Neon with Prisma, prefer a connection string with `sslmode=require`. If the Neon URL includes `channel_binding=require`, remove that query parameter for Prisma migration/build commands because Prisma's schema engine can fail before printing a useful error.
+
+When using Upstash Redis with `ioredis`, use the TLS URL form:
+
+```bash
+REDIS_URL=rediss://default:...@your-upstash-host.upstash.io:6379
 ```
 
 ## Build Commands
@@ -483,10 +506,46 @@ Set these backend environment variables on Render:
 
 ```bash
 DATABASE_URL=...
-FRONTEND_URL=https://your-frontend.example
-REDIS_URL=...
+FRONTEND_URL=https://collabcanvas-eight.vercel.app
+CLIENT_ORIGIN=https://collabcanvas-eight.vercel.app
+CORS_ORIGINS=https://collabcanvas-eight.vercel.app,http://localhost:5173
+REDIS_URL=rediss://...
+JWT_SECRET=...
+COOKIE_SECRET=...
 GEMINI_API_KEY=...
-INSTANCE_ID=render-${RENDER_INSTANCE_ID}
+GEMINI_MODEL=gemini-2.5-flash
+NODE_ENV=production
+INSTANCE_ID=render-production
+```
+
+Render backend settings:
+
+```bash
+Root directory: backend
+Build command: npm ci --include=dev && npm run prisma:generate && npm run build
+Start command: npm run prisma:deploy && npm run start
+Health check path: /api/health
+Region: Singapore
+```
+
+`npm ci --include=dev` is required because the backend TypeScript build needs dev dependency type packages such as `@types/express`.
+
+### Vercel Deployment Notes
+
+The frontend is deployed from the repository root with `vercel.json`:
+
+```bash
+Framework: Vite
+Build command: npm run build
+Output directory: dist
+Install command: npm ci
+```
+
+Set these Vercel production environment variables:
+
+```bash
+VITE_API_URL=https://collabcanvas-backend-o0ft.onrender.com
+VITE_SOCKET_URL=https://collabcanvas-backend-o0ft.onrender.com
 ```
 
 Free Render services can sleep, so multi-instance socket tests may be inconsistent until instances are awake. For reliable scale testing, run two local backend instances on different ports with the same Redis and PostgreSQL, then point two browser clients at different backend URLs and verify drawing, chat, cursors, and participant presence cross instances.
@@ -500,7 +559,7 @@ Free Render services can sleep, so multi-instance socket tests may be inconsiste
 
 ## Known Limitations
 
-- PostgreSQL migrations are expected to be generated from `backend/prisma/schema.prisma` in the target environment; this repo keeps the schema and commands but not a migration history folder.
+- PostgreSQL migrations are tracked in `backend/prisma/migrations`; production deploys run `prisma migrate deploy` before starting the backend.
 - Redis is optional for local single-instance work; multi-instance broadcasts require Redis to be configured.
 - Offline conflict handling intentionally uses server sequence order as the winner and marks local conflicting operations failed for user review.
 - Fabric 7 is deferred because it is a breaking upgrade; see the audit note above.
