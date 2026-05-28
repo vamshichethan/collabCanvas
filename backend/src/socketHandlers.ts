@@ -1,5 +1,6 @@
 import type { Server, Socket } from 'socket.io';
 import { ActivityService } from './activityService.js';
+import { logger } from './logger.js';
 import { OperationManager } from './operationManager.js';
 import { PersistenceManager } from './persistenceManager.js';
 import { PermissionManager } from './permissionManager.js';
@@ -8,6 +9,7 @@ import { RateLimiter } from './rateLimiter.js';
 import { toDbRole, toSocketRole } from './roleGuards.js';
 import { RoomManager } from './roomManager.js';
 import type { ClientOperation, CursorPosition, Participant } from './types.js';
+import { schemas } from './validation.js';
 
 type Managers = {
   rooms: RoomManager;
@@ -100,6 +102,7 @@ export const registerSocketHandlers = (io: Server, socket: Socket, managers: Man
 
   socket.on('operation:submit', async (operation: ClientOperation) => {
     try {
+      operation = schemas.operation.parse(operation) as ClientOperation;
       operation.userId = socket.data.userId;
       const rate = await rateLimiter.check('drawing', operation.userId);
       if (!rate.allowed) {
@@ -109,6 +112,7 @@ export const registerSocketHandlers = (io: Server, socket: Socket, managers: Man
       const reason = await permissions.validateOperation(operation);
 
       if (reason) {
+        logger.warn({ reason, userId: operation.userId, roomId: operation.roomId }, 'Operation rejected');
         const boardState = await operations.getBoardState(operation.boardId || operation.roomId);
         socket.emit('operation:ack', {
           accepted: false,
@@ -137,6 +141,7 @@ export const registerSocketHandlers = (io: Server, socket: Socket, managers: Man
       });
       socket.to(operation.roomId).emit('operation:applied', appliedOperation);
     } catch (error) {
+      logger.error({ error }, 'Operation submit failed');
       socket.emit('operation:ack', {
         accepted: false,
         opId: operation.opId,
@@ -163,6 +168,8 @@ export const registerSocketHandlers = (io: Server, socket: Socket, managers: Man
       for (const item of payload.operations) {
         try {
           item.operation.userId = socket.data.userId;
+          item.operation = schemas.operation.parse(item.operation) as ClientOperation;
+          item.operation.userId = socket.data.userId;
           const rate = await rateLimiter.check('drawing', item.operation.userId);
           if (!rate.allowed) {
             acks.push({
@@ -175,6 +182,7 @@ export const registerSocketHandlers = (io: Server, socket: Socket, managers: Man
           }
           const reason = await permissions.validateOperation(item.operation);
           if (reason) {
+            logger.warn({ reason, userId: item.operation.userId, roomId: item.operation.roomId }, 'Batch operation rejected');
             acks.push({
               accepted: false,
               localId: item.localId,

@@ -2,6 +2,32 @@
 
 Room-based collaborative whiteboard built with React, TypeScript, Tailwind CSS, Fabric.js, Node.js, Express, and Socket.IO.
 
+## Architecture
+
+```mermaid
+flowchart LR
+  Browser["React + Fabric.js client"] --> REST["Express REST API"]
+  Browser --> Socket["Socket.IO gateway"]
+  REST --> Auth["JWT cookie auth + Zod validation"]
+  Socket --> Auth
+  REST --> Prisma["Prisma ORM"]
+  Socket --> Operations["Operation manager"]
+  Operations --> Prisma
+  Prisma --> Postgres["PostgreSQL source of truth"]
+  Socket --> Redis["Redis adapter, presence, rate limits"]
+  REST --> Gemini["Gemini summary API"]
+```
+
+## Feature List
+
+- Authenticated room-based whiteboards with role permissions.
+- Structured object model rendered through Fabric.js.
+- Ordered operation log with optimistic sync, reconnect recovery, offline queue, and replay mode.
+- PostgreSQL persistence for rooms, boards, operations, snapshots, versions, comments, chat, exports, and AI summaries.
+- Redis-backed Socket.IO scaling, presence, and rate limiting.
+- Dashboard board lifecycle, invite management, thumbnails, exports, chat, object comments, activity feed, and Gemini summaries.
+- Production hardening with validation, logging, security middleware, tests, Docker, and deployment documentation.
+
 ## Frontend Setup
 
 ```bash
@@ -40,6 +66,13 @@ DATABASE_URL=""
 FRONTEND_URL="http://localhost:5173"
 CLIENT_ORIGIN="http://localhost:5173"
 PORT=5000
+NODE_ENV="development"
+JWT_SECRET=""
+COOKIE_SECRET=""
+CORS_ORIGINS="http://localhost:5173"
+API_RATE_LIMIT_PER_MINUTE=300
+JSON_BODY_LIMIT="1mb"
+LOG_LEVEL="debug"
 GEMINI_API_KEY=""
 REDIS_URL=""
 REDIS_HOST=""
@@ -220,15 +253,27 @@ Use Neon PostgreSQL or Supabase PostgreSQL by putting the connection string in `
 
 ## API Routes
 
+- `POST /api/auth/signup` creates a user and sets the HTTP-only auth cookie.
+- `POST /api/auth/login` verifies credentials and sets the HTTP-only auth cookie.
+- `POST /api/auth/logout` clears the auth cookie.
+- `GET /api/auth/me` returns the authenticated user.
+- `GET /api/dashboard/boards` returns searchable/filterable dashboard board cards.
 - `POST /api/rooms` creates a persisted room, board, owner participant, and invite code.
 - `GET /api/rooms/:roomId` returns room details, boards, and participants.
 - `POST /api/rooms/:roomId/join` persists participant membership.
 - `PATCH /api/rooms/:roomId/settings` updates public/private, viewer comments, viewer AI summaries, viewer exports, viewer replay, and board lock settings.
+- `PATCH /api/rooms/:roomId/invite-settings` updates invite enabled, invite role, invite expiry, and visibility.
 - `POST /api/rooms/:roomId/regenerate-invite` regenerates the invite code.
 - `POST /api/rooms/:roomId/participants` invites a participant.
 - `PATCH /api/rooms/:roomId/participants/:userId` changes a participant role.
 - `DELETE /api/rooms/:roomId/participants/:userId` removes a participant.
 - `POST /api/rooms/:roomId/transfer-owner` transfers ownership.
+- `POST /api/boards` creates a new dashboard board.
+- `PATCH /api/boards/:boardId` renames, pins, or updates a board thumbnail.
+- `POST /api/boards/:boardId/duplicate` duplicates a board for owners/editors.
+- `POST /api/boards/:boardId/archive` archives a board.
+- `POST /api/boards/:boardId/restore` restores an archived board.
+- `DELETE /api/boards/:boardId` soft-deletes a board.
 - `GET /api/boards/:boardId` returns the persisted board state and latest sequence.
 - `GET /api/boards/:boardId/versions` lists named versions.
 - `POST /api/boards/:boardId/versions` creates a named version from the current board state.
@@ -358,6 +403,61 @@ Redis rate limits protect high-volume actions:
 
 Rate-limited socket events emit `rate-limit:error`; rate-limited REST routes return `429`.
 
+## Production Hardening
+
+Phase 15 adds a production guard layer around the app:
+
+- Zod validation for auth, board creation/update, invite settings, role changes, drawing operations, chat, comments, AI summary, and export requests.
+- `AppError`, `asyncHandler`, and global error middleware with a consistent error shape:
+
+```json
+{
+  "success": false,
+  "message": "Invalid request",
+  "errors": []
+}
+```
+
+- Pino logging for auth failures, socket connections/disconnections, permission denials, operation errors, chat/comment failures, and server startup.
+- Helmet security headers, CORS origin allow-listing, JSON body size limits, and API rate limiting.
+- Frontend API handling understands both legacy `{ "error": "..." }` responses and the hardened `{ "message": "..." }` response shape.
+
+Known audit note: the frontend currently uses Fabric 6.9.x. `npm audit --omit=dev` reports a Fabric SVG export advisory that is fixed only by a breaking Fabric 7 upgrade. CollabCanvas exports PNG/PDF/JSON and does not expose SVG export, so the upgrade is intentionally deferred until a dedicated canvas regression pass.
+
+## Testing
+
+Backend tests use Vitest with focused coverage for validation/error handling, permissions, operation manager caching, replay shaping, and Socket.IO payload validation. Supertest and Socket.IO client utilities are installed for integration suites that run in environments where opening test listeners is allowed.
+
+Frontend tests use Vitest, jsdom, React Testing Library, and jest-dom. Coverage includes dashboard cards, read-only permission UI, toolbar disabled states, and reusable empty/auth-facing UI.
+
+Run tests:
+
+```bash
+npm run test
+npm --prefix backend run test
+```
+
+## Deployment Files
+
+- `backend/Dockerfile` builds the Express/Socket.IO backend for production.
+- `docker-compose.yml` starts local PostgreSQL and Redis.
+- `DEPLOYMENT.md` documents local Docker, Render, Redis, health checks, and multi-instance testing.
+
+## Demo Checklist
+
+1. Create an account and log in.
+2. Create a board from the dashboard.
+3. Invite a second user with an invite link.
+4. Draw together and confirm live cursors.
+5. Switch a participant to viewer and verify drawing controls are disabled.
+6. Add chat messages and object comments.
+7. Generate an AI summary.
+8. Export PNG, PDF, and JSON.
+9. Create a version and restore it.
+10. Replay the session.
+11. Disconnect/reconnect and verify missed operations sync.
+12. Return to the dashboard and confirm board thumbnail, archive/restore, and version history flows.
+
 ### Local Redis
 
 Run Redis locally with Docker:
@@ -390,3 +490,17 @@ INSTANCE_ID=render-${RENDER_INSTANCE_ID}
 ```
 
 Free Render services can sleep, so multi-instance socket tests may be inconsistent until instances are awake. For reliable scale testing, run two local backend instances on different ports with the same Redis and PostgreSQL, then point two browser clients at different backend URLs and verify drawing, chat, cursors, and participant presence cross instances.
+
+## Socket Event Summary
+
+- Room and presence: `room:create`, `room:join`, `room:leave`, `room:participants`, `user:joined`, `user:left`, `cursor:move`.
+- Operation sync: `operation:submit`, `operation:ack`, `operation:applied`, `operation:missed-request`, `operation:missed-response`, `operation:submit-batch`, `operation:batch-ack`, `operation:conflict`, `board:full-sync`, `board:resync-required`.
+- Collaboration panels: `chat:send`, `chat:new`, `chat:history`, `comment:add`, `comment:new`, `comment:list`, `comment:resolve`, `comment:delete`, `activity:new`.
+- Permissions and limits: `permission:error`, `rate-limit:error`, `sync:status`, `sync:pending-ops`.
+
+## Known Limitations
+
+- PostgreSQL migrations are expected to be generated from `backend/prisma/schema.prisma` in the target environment; this repo keeps the schema and commands but not a migration history folder.
+- Redis is optional for local single-instance work; multi-instance broadcasts require Redis to be configured.
+- Offline conflict handling intentionally uses server sequence order as the winner and marks local conflicting operations failed for user review.
+- Fabric 7 is deferred because it is a breaking upgrade; see the audit note above.

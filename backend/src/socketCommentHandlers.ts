@@ -1,7 +1,9 @@
 import type { Server, Socket } from 'socket.io';
 import type { ActivityService } from './activityService.js';
 import type { CommentService } from './commentService.js';
+import { logger } from './logger.js';
 import type { PermissionManager } from './permissionManager.js';
+import { schemas } from './validation.js';
 
 export const registerSocketCommentHandlers = (
   io: Server,
@@ -13,21 +15,23 @@ export const registerSocketCommentHandlers = (
   });
 
   socket.on('comment:add', async (payload: { roomId: string; boardId: string; objectId: string; userId: string; message: string }) => {
+    const body = schemas.comment.parse({ objectId: payload.objectId, message: payload.message });
     const userId = socket.data.userId as string;
     const reason = await services.permissions.canComment(payload.roomId, userId);
     if (reason) {
+      logger.warn({ roomId: payload.roomId, userId, reason }, 'Comment permission denied');
       socket.emit('permission:error', { message: reason });
       return;
     }
 
     try {
-      const comment = await services.comments.add(payload.boardId, payload.objectId, userId, payload.message);
+      const comment = await services.comments.add(payload.boardId, body.objectId ?? payload.objectId, userId, body.message);
       const activity = await services.activity.create(payload.roomId, 'COMMENT_ADD', `${comment.userName} commented on an object`, userId);
       io.to(payload.roomId).emit('comment:new', comment);
       io.to(payload.roomId).emit('activity:new', activity);
     } catch (error) {
       socket.emit('permission:error', { message: 'Unable to add comment' });
-      console.error(error);
+      logger.error({ error }, 'Comment add failed');
     }
   });
 
