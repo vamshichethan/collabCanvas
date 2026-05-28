@@ -1,8 +1,35 @@
-import type { ParticipantRole, Prisma, PrismaClient, RoomVisibility } from '@prisma/client';
+import type { BoardStatus, ParticipantRole, Prisma, PrismaClient, RoomVisibility } from '@prisma/client';
 import type { BoardOperation, ClientOperation, WhiteboardObject } from './types.js';
 
 const SNAPSHOT_INTERVAL = 25;
 const SYSTEM_USER_ID = 'system';
+
+type DashboardBoardFilters = {
+  search?: string;
+  role?: ParticipantRole | 'ALL';
+  sort?: 'updated' | 'created' | 'title';
+  includeArchived?: boolean;
+  limit?: number;
+};
+
+type CreateBoardInput = {
+  title?: string;
+  description?: string;
+  visibility?: RoomVisibility;
+};
+
+type UpdateBoardInput = {
+  title?: string;
+  pinned?: boolean;
+  thumbnailUrl?: string;
+};
+
+type InviteSettingsInput = {
+  inviteEnabled?: boolean;
+  inviteRole?: ParticipantRole;
+  inviteExpiresAt?: string | null;
+  visibility?: RoomVisibility;
+};
 
 export class PersistenceManager {
   constructor(private readonly prisma: PrismaClient) {}
@@ -56,6 +83,43 @@ export class PersistenceManager {
         where: { roomId_userId: { roomId: room.id, userId } },
         update: { role: 'OWNER' },
         create: { roomId: room.id, userId, role: 'OWNER' },
+      });
+
+      return { room, board };
+    });
+  }
+
+  async createBoard(userId: string, name: string, input: CreateBoardInput = {}) {
+    await this.ensureSystemUser();
+    await this.ensureUser(userId, name);
+    const roomId = this.createRoomId();
+    const title = input.title?.trim() || 'Untitled Board';
+
+    return this.prisma.$transaction(async (tx) => {
+      const room = await tx.room.create({
+        data: {
+          id: roomId,
+          name: title,
+          description: input.description?.trim() || null,
+          inviteCode: roomId,
+          visibility: input.visibility ?? 'PRIVATE',
+          ownerId: userId,
+          lastActiveAt: new Date(),
+        },
+      });
+
+      const board = await tx.board.create({
+        data: {
+          id: roomId,
+          roomId: room.id,
+          title,
+          currentState: [],
+          lastSequenceNumber: 0,
+        },
+      });
+
+      await tx.participant.create({
+        data: { roomId: room.id, userId, role: 'OWNER' },
       });
 
       return { room, board };
@@ -134,7 +198,20 @@ export class PersistenceManager {
   async regenerateInviteCode(roomId: string) {
     return this.prisma.room.update({
       where: { id: roomId },
-      data: { inviteCode: this.createRoomId() },
+      data: { inviteCode: this.createRoomId(), inviteEnabled: true },
+    });
+  }
+
+  async updateInviteSettings(roomId: string, settings: InviteSettingsInput) {
+    return this.prisma.room.update({
+      where: { id: roomId },
+      data: {
+        inviteEnabled: settings.inviteEnabled,
+        inviteRole: settings.inviteRole,
+        inviteExpiresAt: settings.inviteExpiresAt === null ? null : settings.inviteExpiresAt ? new Date(settings.inviteExpiresAt) : undefined,
+        visibility: settings.visibility,
+      },
+      include: { boards: true, participants: { include: { user: true } } },
     });
   }
 
@@ -184,6 +261,168 @@ export class PersistenceManager {
     });
   }
 
+  async getDashboardBoards(userId: string, filters: DashboardBoardFilters = {}) {
+    const search = filters.search?.trim();
+    const statusFilter: BoardStatus[] = filters.includeArchived ? ['ACTIVE', 'ARCHIVED'] : ['ACTIVE'];
+    const orderBy =
+      filters.sort === 'created'
+        ? ({ createdAt: 'desc' } as const)
+        : filters.sort === 'title'
+          ? ({ title: 'asc' } as const)
+          : ({ updatedAt: 'desc' } as const);
+
+    const boards = await this.prisma.board.findMany({
+      where: {
+        status: { in: statusFilter },
+        room: {
+          status: { in: filters.includeArchived ? ['ACTIVE', 'ARCHIVED'] : ['ACTIVE'] },
+          OR: [
+            { participants: { some: { userId, ...(filters.role && filters.role !== 'ALL' ? { role: filters.role } : {}) } } },
+            { visibility: 'PUBLIC' },
+          ],
+        },
+        ...(search
+          ? {
+              OR: [
+                { title: { contains: search, mode: 'insensitive' } },
+                { room: { name: { contains: search, mode: 'insensitive' } } },
+                { room: { description: { contains: search, mode: 'insensitive' } } },
+              ],
+            }
+          : {}),
+      },
+      include: {
+        room: {
+          include: {
+            participants: { include: { user: true } },
+          },
+        },
+      },
+      orderBy,
+      take: Math.min(Math.max(filters.limit ?? 40, 1), 80),
+    });
+
+    const mappedBoards = boards.map((board) => {
+      const participant = board.room.participants.find((item) => item.userId === userId);
+      const role = participant?.role ?? 'VIEWER';
+      return {
+        id: board.id,
+        roomId: board.roomId,
+        title: board.title,
+        roomTitle: board.room.name,
+        description: board.room.description,
+        status: board.status,
+        roomStatus: board.room.status,
+        role,
+        visibility: board.room.visibility,
+        inviteCode: board.room.inviteCode,
+        inviteEnabled: board.room.inviteEnabled,
+        inviteRole: board.room.inviteRole,
+        inviteExpiresAt: board.room.inviteExpiresAt?.toISOString() ?? null,
+        ownerId: board.room.ownerId,
+        createdAt: board.createdAt.toISOString(),
+        updatedAt: board.updatedAt.toISOString(),
+        lastActiveAt: board.room.lastActiveAt.toISOString(),
+        lastSequenceNumber: board.lastSequenceNumber,
+        activeParticipantCount: board.room.participants.length,
+        thumbnailUrl: board.thumbnailUrl,
+        pinned: board.pinned,
+        isOwner: role === 'OWNER',
+        isShared: role !== 'OWNER',
+        isPublic: board.room.visibility === 'PUBLIC',
+      };
+    });
+
+    return filters.role && filters.role !== 'ALL' ? mappedBoards.filter((board) => board.role === filters.role) : mappedBoards;
+  }
+
+  async updateBoard(boardId: string, input: UpdateBoardInput) {
+    return this.prisma.$transaction(async (tx) => {
+      const board = await tx.board.update({
+        where: { id: boardId },
+        data: {
+          title: input.title?.trim(),
+          pinned: input.pinned,
+          thumbnailUrl: input.thumbnailUrl,
+        },
+      });
+
+      if (input.title?.trim()) {
+        await tx.room.update({
+          where: { id: board.roomId },
+          data: { name: input.title.trim(), lastActiveAt: new Date() },
+        });
+      }
+
+      return board;
+    });
+  }
+
+  async duplicateBoard(boardId: string, userId: string, name: string) {
+    await this.ensureSystemUser();
+    await this.ensureUser(userId, name);
+    const source = await this.prisma.board.findUniqueOrThrow({ where: { id: boardId }, include: { room: true } });
+    const roomId = this.createRoomId();
+    const title = `${source.title} Copy`;
+
+    return this.prisma.$transaction(async (tx) => {
+      const room = await tx.room.create({
+        data: {
+          id: roomId,
+          name: title,
+          description: source.room.description,
+          inviteCode: roomId,
+          visibility: 'PRIVATE',
+          ownerId: userId,
+          lastActiveAt: new Date(),
+        },
+      });
+
+      const board = await tx.board.create({
+        data: {
+          id: roomId,
+          roomId: room.id,
+          title,
+          currentState: source.currentState as Prisma.InputJsonValue,
+          lastSequenceNumber: source.lastSequenceNumber,
+          thumbnailUrl: source.thumbnailUrl,
+        },
+      });
+
+      await tx.participant.create({ data: { roomId, userId, role: 'OWNER' } });
+      return { room, board };
+    });
+  }
+
+  async setBoardStatus(boardId: string, status: BoardStatus) {
+    const now = new Date();
+    return this.prisma.$transaction(async (tx) => {
+      const board = await tx.board.update({
+        where: { id: boardId },
+        data: {
+          status,
+          archivedAt: status === 'ARCHIVED' ? now : null,
+          deletedAt: status === 'DELETED' ? now : null,
+        },
+      });
+      await tx.room.update({
+        where: { id: board.roomId },
+        data: {
+          status,
+          lastActiveAt: now,
+        },
+      });
+      return board;
+    });
+  }
+
+  async getBoardWithRoom(boardId: string) {
+    return this.prisma.board.findUnique({
+      where: { id: boardId },
+      include: { room: { include: { participants: true } } },
+    });
+  }
+
   async submitOperation(operation: ClientOperation) {
     return this.prisma.$transaction(async (tx) => {
       const board = await tx.board.findUniqueOrThrow({ where: { id: operation.boardId } });
@@ -220,6 +459,7 @@ export class PersistenceManager {
         data: {
           currentState: nextState as Prisma.InputJsonValue,
           lastSequenceNumber: sequenceNumber,
+          room: { update: { lastActiveAt: new Date() } },
         },
       });
 

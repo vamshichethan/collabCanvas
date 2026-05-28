@@ -57,11 +57,15 @@ export const registerSocketHandlers = (io: Server, socket: Socket, managers: Man
       const roomId = payload.roomId.trim();
       const authUser = socket.data.user as { id: string; name: string };
       const room = await persistence.getRoom(roomId);
-      if (!room || (room.visibility !== 'PUBLIC' && !room.participants.some((participant) => participant.userId === authUser.id))) {
+      const existing = room?.participants.some((participant) => participant.userId === authUser.id);
+      const inviteOpen = Boolean(
+        room?.inviteEnabled && room.visibility === 'PUBLIC' && (!room.inviteExpiresAt || room.inviteExpiresAt.getTime() > Date.now()),
+      );
+      if (!room || room.status !== 'ACTIVE' || (!existing && !inviteOpen)) {
         socket.emit('room:error', { message: 'Room is private or invite is required' });
         return;
       }
-      const persistedParticipant = await persistence.joinRoom(roomId, authUser.id, authUser.name, 'VIEWER');
+      const persistedParticipant = await persistence.joinRoom(roomId, authUser.id, authUser.name, room.inviteRole);
       const participant = toParticipant({ userId: authUser.id, name: authUser.name, role: toSocketRole(persistedParticipant.role) }, socket.id);
       rooms.joinRoom(roomId, participant);
       await presence.upsert(roomId, participant);

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
 import CanvasBoard from './components/CanvasBoard';
 import CollaborationSidebar from './components/CollaborationSidebar';
+import DashboardPage from './components/DashboardPage';
 import ParticipantPanel from './components/ParticipantPanel';
 import RoomSettingsPanel from './components/RoomSettingsPanel';
 import Toolbar from './components/Toolbar';
@@ -8,7 +9,7 @@ import VersionHistoryPanel from './components/VersionHistoryPanel';
 import { useRoomCollaboration } from './hooks/useRoomCollaboration';
 import { api } from './lib/api';
 import { buildReplayCache, buildReplayState } from './lib/replay';
-import { getRoomIdFromPath, navigateToRoom } from './lib/room';
+import { getRoomIdFromPath } from './lib/room';
 import type { AISummaryRecord, AuthUser, DashboardRoom, DrawingSettings, ReplayOperation, SummaryType, Tool, WhiteboardObject } from './types';
 
 function App() {
@@ -48,114 +49,6 @@ function App() {
   }
 
   return roomId ? <RoomPage roomId={roomId} authUser={authUser} onLogout={handleLogout} /> : <DashboardPage authUser={authUser} onLogout={handleLogout} />;
-}
-
-function DashboardPage({ authUser, onLogout }: { authUser: AuthUser; onLogout: () => void }) {
-  const [rooms, setRooms] = useState<DashboardRoom[]>([]);
-  const [joinValue, setJoinValue] = useState('');
-  const [loading, setLoading] = useState(true);
-  const [creating, setCreating] = useState(false);
-
-  const loadRooms = async () => {
-    setLoading(true);
-    try {
-      setRooms(await api.listRooms());
-    } catch {
-      setRooms([]);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    void loadRooms();
-  }, []);
-
-  const createRoom = async () => {
-    setCreating(true);
-    const created = await api.createRoom();
-    setCreating(false);
-    navigateToRoom(created.room.id);
-  };
-
-  const joinRoom = () => {
-    const trimmed = joinValue.trim();
-    const parsed = trimmed.match(/\/room\/([^/?#]+)/)?.[1] ?? trimmed;
-    if (parsed) navigateToRoom(parsed);
-  };
-
-  return (
-    <main className="min-h-screen bg-[#f4f7fb] px-4 py-8 text-slate-950">
-      <section className="mx-auto max-w-6xl">
-        <div className="flex flex-col gap-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-board md:flex-row md:items-end md:justify-between">
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">CollabCanvas</p>
-            <h1 className="mt-2 text-3xl font-semibold">Dashboard</h1>
-            <p className="mt-1 text-sm text-slate-500">Rooms and persisted boards for {authUser.name}</p>
-          </div>
-          <div className="flex flex-wrap gap-2">
-            <button
-              type="button"
-              onClick={createRoom}
-              disabled={creating}
-              className="rounded-lg bg-blue-600 px-4 py-3 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              {creating ? 'Creating...' : 'Create room'}
-            </button>
-            <button
-              type="button"
-              onClick={onLogout}
-              className="rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
-            >
-              Logout
-            </button>
-          </div>
-        </div>
-
-        <div className="mt-4 flex flex-col gap-3 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:flex-row">
-          <input
-            value={joinValue}
-            onChange={(event) => setJoinValue(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter') joinRoom();
-            }}
-            placeholder="Paste invite link or room ID"
-            className="min-w-0 flex-1 rounded-lg border border-slate-200 px-3 py-3 text-sm outline-none transition focus:border-blue-500"
-          />
-          <button
-            type="button"
-            onClick={joinRoom}
-            className="rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
-          >
-            Join room
-          </button>
-        </div>
-
-        <div className="mt-6 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-          {loading ? (
-            <p className="text-sm text-slate-500">Loading rooms...</p>
-          ) : rooms.length === 0 ? (
-            <p className="text-sm text-slate-500">No rooms yet. Create one to start.</p>
-          ) : (
-            rooms.map((room) => (
-              <button
-                type="button"
-                key={room.id}
-                onClick={() => navigateToRoom(room.id)}
-                className="rounded-2xl border border-slate-200 bg-white p-4 text-left shadow-sm transition hover:border-blue-300 hover:shadow-board"
-              >
-                <p className="text-lg font-semibold text-slate-900">{room.name}</p>
-                <p className="mt-1 text-sm text-slate-500">Invite {room.inviteCode}</p>
-                <p className="mt-3 text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">
-                  {room.boards[0]?.lastSequenceNumber ?? 0} operations
-                </p>
-              </button>
-            ))
-          )}
-        </div>
-      </section>
-    </main>
-  );
 }
 
 function AuthPage({
@@ -296,7 +189,8 @@ function RoomPage({ roomId, authUser, onLogout }: { roomId: string; authUser: Au
   const isOwner = currentRole === 'OWNER';
   const isViewer = currentRole === 'VIEWER';
   const boardLocked = Boolean(room?.lockBoardEditing && !isOwner);
-  const readOnly = isViewer || boardLocked;
+  const archivedBoard = room?.status === 'ARCHIVED' || room?.boards[0]?.status === 'ARCHIVED';
+  const readOnly = isViewer || boardLocked || archivedBoard;
   const canSendChat = currentRole === 'OWNER' || currentRole === 'EDITOR' || Boolean(room?.allowViewerComments);
   const canComment = canSendChat;
   const canGenerateAISummary = currentRole === 'OWNER' || currentRole === 'EDITOR' || Boolean(room?.allowViewerAISummaries);
@@ -447,6 +341,12 @@ function RoomPage({ roomId, authUser, onLogout }: { roomId: string; authUser: Au
     await api.recordBoardExport(roomId, collaboration.userId, exportType);
   };
 
+  const updateThumbnail = (thumbnailUrl: string) => {
+    void api.updateBoard(roomId, { thumbnailUrl }).catch(() => {
+      setToast('Unable to update board thumbnail');
+    });
+  };
+
   const startReplay = async () => {
     if (!canReplay) {
       setToast('You do not have permission to replay this board');
@@ -554,7 +454,7 @@ function RoomPage({ roomId, authUser, onLogout }: { roomId: string; authUser: Au
             >
               Logout
             </button>
-            <p className="text-xs font-medium uppercase tracking-[0.18em] text-slate-400">Phase 13</p>
+            <p className="text-xs font-medium uppercase tracking-[0.18em] text-slate-400">Phase 14</p>
           </div>
         </div>
       </header>
@@ -616,6 +516,7 @@ function RoomPage({ roomId, authUser, onLogout }: { roomId: string; authUser: Au
             onJsonExport={exportJson}
             onRecordExport={recordExport}
             onExportError={setToast}
+            onThumbnailChange={updateThumbnail}
             readOnly={readOnly || replayMode}
             toolbar={
               <Toolbar

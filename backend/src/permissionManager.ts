@@ -28,6 +28,7 @@ export class PermissionManager {
 
     const participant = await this.getParticipant(operation.roomId, operation.userId);
     if (!participant) return 'user is not a room participant';
+    if (participant.room.status !== 'ACTIVE') return 'archived boards are read-only';
     if (participant.role === 'VIEWER') return 'viewer cannot submit drawing operations';
     if (participant.room.lockBoardEditing && participant.role !== 'OWNER') return 'board editing is locked';
 

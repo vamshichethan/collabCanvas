@@ -29,6 +29,14 @@ export const createApiRoutes = (
   const router = Router();
   router.use(requireAuth);
 
+  const getBoardAccess = async (boardId: string, userId: string) => {
+    const board = await persistence.getBoardWithRoom(boardId);
+    const participant = board?.room.participants.find((item) => item.userId === userId);
+    return { board, participant };
+  };
+  const canJoinByInvite = (room: Awaited<ReturnType<PersistenceManager['getRoom']>>) =>
+    Boolean(room?.inviteEnabled && room.visibility === 'PUBLIC' && (!room.inviteExpiresAt || room.inviteExpiresAt.getTime() > Date.now()));
+
   router.get('/rooms', async (request, response, next) => {
     try {
       const userId = getAuthUser(request).id;
@@ -48,6 +56,147 @@ export const createApiRoutes = (
     }
   });
 
+  router.get('/dashboard/boards', async (request, response, next) => {
+    try {
+      const userId = getAuthUser(request).id;
+      response.json(
+        await persistence.getDashboardBoards(userId, {
+          search: String(request.query.search ?? ''),
+          role: request.query.role === 'OWNER' || request.query.role === 'EDITOR' || request.query.role === 'VIEWER' ? request.query.role : 'ALL',
+          sort: request.query.sort === 'created' || request.query.sort === 'title' ? request.query.sort : 'updated',
+          includeArchived: request.query.includeArchived === 'true',
+          limit: Number(request.query.limit ?? 40),
+        }),
+      );
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post('/boards', async (request, response, next) => {
+    try {
+      const user = getAuthUser(request);
+      const created = await persistence.createBoard(user.id, user.name, {
+        title: request.body?.title,
+        description: request.body?.description,
+        visibility: request.body?.visibility === 'PUBLIC' ? 'PUBLIC' : 'PRIVATE',
+      });
+      await services.activity.create(created.room.id, 'BOARD_CREATE', `${user.name} created board "${created.board.title}"`, user.id);
+      response.status(201).json(created);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.patch('/boards/:boardId', async (request, response, next) => {
+    try {
+      const user = getAuthUser(request);
+      const { board, participant } = await getBoardAccess(request.params.boardId, user.id);
+      if (!board) {
+        response.status(404).json({ error: 'Board not found' });
+        return;
+      }
+      const thumbnailOnly =
+        typeof request.body?.thumbnailUrl === 'string' && request.body?.title === undefined && request.body?.pinned === undefined;
+      if (thumbnailOnly ? !participant || participant.role === 'VIEWER' : participant?.role !== 'OWNER') {
+        response.status(403).json({ error: 'owner permission required' });
+        return;
+      }
+
+      const updated = await persistence.updateBoard(request.params.boardId, {
+        title: request.body?.title,
+        pinned: typeof request.body?.pinned === 'boolean' ? request.body.pinned : undefined,
+        thumbnailUrl: typeof request.body?.thumbnailUrl === 'string' ? request.body.thumbnailUrl : undefined,
+      });
+      if (request.body?.title) {
+        await services.activity.create(board.roomId, 'BOARD_RENAME', `${user.name} renamed board to "${updated.title}"`, user.id);
+      }
+      response.json(updated);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post('/boards/:boardId/duplicate', async (request, response, next) => {
+    try {
+      const user = getAuthUser(request);
+      const { board, participant } = await getBoardAccess(request.params.boardId, user.id);
+      if (!board) {
+        response.status(404).json({ error: 'Board not found' });
+        return;
+      }
+      if (!participant || participant.role === 'VIEWER') {
+        response.status(403).json({ error: 'editor permission required' });
+        return;
+      }
+      const duplicated = await persistence.duplicateBoard(request.params.boardId, user.id, user.name);
+      await services.activity.create(duplicated.room.id, 'BOARD_DUPLICATE', `${user.name} duplicated "${board.title}"`, user.id);
+      response.status(201).json(duplicated);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post('/boards/:boardId/archive', async (request, response, next) => {
+    try {
+      const user = getAuthUser(request);
+      const { board, participant } = await getBoardAccess(request.params.boardId, user.id);
+      if (!board) {
+        response.status(404).json({ error: 'Board not found' });
+        return;
+      }
+      if (participant?.role !== 'OWNER') {
+        response.status(403).json({ error: 'owner permission required' });
+        return;
+      }
+      const archived = await persistence.setBoardStatus(request.params.boardId, 'ARCHIVED');
+      await services.activity.create(board.roomId, 'BOARD_ARCHIVE', `${user.name} archived "${board.title}"`, user.id);
+      response.json(archived);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post('/boards/:boardId/restore', async (request, response, next) => {
+    try {
+      const user = getAuthUser(request);
+      const { board, participant } = await getBoardAccess(request.params.boardId, user.id);
+      if (!board) {
+        response.status(404).json({ error: 'Board not found' });
+        return;
+      }
+      if (participant?.role !== 'OWNER') {
+        response.status(403).json({ error: 'owner permission required' });
+        return;
+      }
+      const restored = await persistence.setBoardStatus(request.params.boardId, 'ACTIVE');
+      await services.activity.create(board.roomId, 'BOARD_RESTORE', `${user.name} restored "${board.title}"`, user.id);
+      response.json(restored);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.delete('/boards/:boardId', async (request, response, next) => {
+    try {
+      const user = getAuthUser(request);
+      const { board, participant } = await getBoardAccess(request.params.boardId, user.id);
+      if (!board) {
+        response.status(404).json({ error: 'Board not found' });
+        return;
+      }
+      if (participant?.role !== 'OWNER') {
+        response.status(403).json({ error: 'owner permission required' });
+        return;
+      }
+      const deleted = await persistence.setBoardStatus(request.params.boardId, 'DELETED');
+      await services.activity.create(board.roomId, 'BOARD_DELETE', `${user.name} deleted "${board.title}"`, user.id);
+      response.json(deleted);
+    } catch (error) {
+      next(error);
+    }
+  });
+
   router.get('/rooms/:roomId', async (request, response, next) => {
     try {
       const userId = getAuthUser(request).id;
@@ -56,7 +205,8 @@ export const createApiRoutes = (
         response.status(404).json({ error: 'Room not found' });
         return;
       }
-      if (room.visibility !== 'PUBLIC' && !room.participants.some((participant) => participant.userId === userId)) {
+      const existing = room.participants.some((participant) => participant.userId === userId);
+      if (room.status === 'DELETED' || (!existing && room.visibility !== 'PUBLIC')) {
         response.status(403).json({ error: 'Room is private or invite is required' });
         return;
       }
@@ -70,11 +220,12 @@ export const createApiRoutes = (
     try {
       const user = getAuthUser(request);
       const room = await persistence.getRoom(request.params.roomId);
-      if (!room || (room.visibility !== 'PUBLIC' && !room.participants.some((participant) => participant.userId === user.id))) {
+      const existing = room?.participants.some((participant) => participant.userId === user.id);
+      if (!room || room.status !== 'ACTIVE' || (!existing && !canJoinByInvite(room))) {
         response.status(403).json({ error: 'Room is private or invite is required' });
         return;
       }
-      await persistence.joinRoom(request.params.roomId, user.id, user.name, 'VIEWER');
+      await persistence.joinRoom(request.params.roomId, user.id, user.name, room.inviteRole);
       response.json({ ok: true });
     } catch (error) {
       next(error);
@@ -97,7 +248,30 @@ export const createApiRoutes = (
         response.status(403).json({ error: reason });
         return;
       }
-      response.json(await persistence.regenerateInviteCode(request.params.roomId));
+      const room = await persistence.regenerateInviteCode(request.params.roomId);
+      await services.activity.create(request.params.roomId, 'INVITE_REGENERATE', `${getAuthUser(request).name} regenerated the invite link`, userId);
+      response.json(room);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.patch('/rooms/:roomId/invite-settings', async (request, response, next) => {
+    try {
+      const user = getAuthUser(request);
+      const reason = await permissions.requireAction(request.params.roomId, user.id, 'INVITE');
+      if (reason) {
+        response.status(403).json({ error: reason });
+        return;
+      }
+      const room = await persistence.updateInviteSettings(request.params.roomId, {
+        inviteEnabled: typeof request.body?.inviteEnabled === 'boolean' ? request.body.inviteEnabled : undefined,
+        inviteRole: request.body?.inviteRole ? normalizeRole(request.body.inviteRole) : undefined,
+        inviteExpiresAt: request.body?.inviteExpiresAt ?? undefined,
+        visibility: request.body?.visibility === 'PUBLIC' ? 'PUBLIC' : request.body?.visibility === 'PRIVATE' ? 'PRIVATE' : undefined,
+      });
+      await services.activity.create(request.params.roomId, 'INVITE_REGENERATE', `${user.name} updated invite settings`, user.id);
+      response.json(room);
     } catch (error) {
       next(error);
     }

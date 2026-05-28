@@ -6,6 +6,8 @@ import type {
   BoardJsonExport,
   BoardVersionRecord,
   ChatMessage,
+  DashboardBoard,
+  DashboardBoardFilters,
   DashboardRoom,
   ObjectComment,
   SummaryType,
@@ -43,10 +45,68 @@ export const api = {
     return request<DashboardRoom[]>('/api/rooms');
   },
 
+  async listDashboardBoards(filters: DashboardBoardFilters) {
+    const params = new URLSearchParams({
+      search: filters.search,
+      role: filters.role,
+      sort: filters.sort,
+      includeArchived: String(filters.includeArchived),
+      limit: '60',
+    });
+    return request<DashboardBoard[]>(`/api/dashboard/boards?${params.toString()}`);
+  },
+
   async createRoom(_userId?: string, _name?: string) {
-    return request<{ room: DashboardRoom; board: { id: string } }>('/api/rooms', {
+    return request<{ room: DashboardRoom; board: { id: string; title: string } }>('/api/boards', {
       method: 'POST',
-      body: JSON.stringify({}),
+      body: JSON.stringify({ title: 'Untitled Board', visibility: 'PRIVATE' }),
+    });
+  },
+
+  async createBoard(input: { title: string; description?: string; visibility: 'PUBLIC' | 'PRIVATE' }) {
+    return request<{ room: DashboardRoom; board: { id: string; title: string } }>('/api/boards', {
+      method: 'POST',
+      body: JSON.stringify(input),
+    });
+  },
+
+  async updateBoard(boardId: string, input: { title?: string; pinned?: boolean; thumbnailUrl?: string }) {
+    return request(`/api/boards/${encodeURIComponent(boardId)}`, {
+      method: 'PATCH',
+      body: JSON.stringify(input),
+    });
+  },
+
+  async duplicateBoard(boardId: string) {
+    return request<{ room: DashboardRoom; board: { id: string; title: string } }>(`/api/boards/${encodeURIComponent(boardId)}/duplicate`, {
+      method: 'POST',
+    });
+  },
+
+  async archiveBoard(boardId: string) {
+    return request(`/api/boards/${encodeURIComponent(boardId)}/archive`, { method: 'POST' });
+  },
+
+  async restoreArchivedBoard(boardId: string) {
+    return request(`/api/boards/${encodeURIComponent(boardId)}/restore`, { method: 'POST' });
+  },
+
+  async deleteBoard(boardId: string) {
+    return request(`/api/boards/${encodeURIComponent(boardId)}`, { method: 'DELETE' });
+  },
+
+  async updateInviteSettings(
+    roomId: string,
+    input: {
+      inviteEnabled?: boolean;
+      inviteRole?: 'EDITOR' | 'VIEWER';
+      inviteExpiresAt?: string | null;
+      visibility?: 'PUBLIC' | 'PRIVATE';
+    },
+  ) {
+    return request<DashboardRoom>(`/api/rooms/${encodeURIComponent(roomId)}/invite-settings`, {
+      method: 'PATCH',
+      body: JSON.stringify(input),
     });
   },
 

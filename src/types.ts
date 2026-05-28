@@ -112,8 +112,13 @@ export type BoardVersionRecord = {
 export type DashboardRoom = {
   id: string;
   name: string;
+  description?: string | null;
   inviteCode: string;
+  inviteEnabled: boolean;
+  inviteRole: 'OWNER' | 'EDITOR' | 'VIEWER';
+  inviteExpiresAt?: string | null;
   visibility: 'PUBLIC' | 'PRIVATE';
+  status: 'ACTIVE' | 'ARCHIVED' | 'DELETED';
   allowViewerComments: boolean;
   allowViewerAISummaries: boolean;
   allowViewerExports: boolean;
@@ -123,6 +128,9 @@ export type DashboardRoom = {
   boards: Array<{
     id: string;
     title: string;
+    status: 'ACTIVE' | 'ARCHIVED' | 'DELETED';
+    thumbnailUrl?: string | null;
+    pinned: boolean;
     lastSequenceNumber: number;
     updatedAt: string;
   }>;
@@ -137,6 +145,41 @@ export type DashboardRoom = {
     };
   }>;
   updatedAt: string;
+  lastActiveAt: string;
+};
+
+export type DashboardBoard = {
+  id: string;
+  roomId: string;
+  title: string;
+  roomTitle: string;
+  description?: string | null;
+  status: 'ACTIVE' | 'ARCHIVED' | 'DELETED';
+  roomStatus: 'ACTIVE' | 'ARCHIVED' | 'DELETED';
+  role: 'OWNER' | 'EDITOR' | 'VIEWER';
+  visibility: 'PUBLIC' | 'PRIVATE';
+  inviteCode: string;
+  inviteEnabled: boolean;
+  inviteRole: 'OWNER' | 'EDITOR' | 'VIEWER';
+  inviteExpiresAt?: string | null;
+  ownerId: string;
+  createdAt: string;
+  updatedAt: string;
+  lastActiveAt: string;
+  lastSequenceNumber: number;
+  activeParticipantCount: number;
+  thumbnailUrl?: string | null;
+  pinned: boolean;
+  isOwner: boolean;
+  isShared: boolean;
+  isPublic: boolean;
+};
+
+export type DashboardBoardFilters = {
+  search: string;
+  role: 'ALL' | 'OWNER' | 'EDITOR' | 'VIEWER';
+  sort: 'updated' | 'created' | 'title';
+  includeArchived: boolean;
 };
 
 export type SummaryType = 'MEETING_NOTES' | 'ACTION_ITEMS' | 'CLASS_NOTES' | 'MIND_MAP';
@@ -189,6 +232,13 @@ export type ObjectComment = {
 export type ActivityType =
   | 'JOIN'
   | 'LEAVE'
+  | 'BOARD_CREATE'
+  | 'BOARD_RENAME'
+  | 'BOARD_DUPLICATE'
+  | 'BOARD_ARCHIVE'
+  | 'BOARD_RESTORE'
+  | 'BOARD_DELETE'
+  | 'INVITE_REGENERATE'
   | 'OBJECT_CREATE'
   | 'OBJECT_DELETE'
   | 'COMMENT_ADD'

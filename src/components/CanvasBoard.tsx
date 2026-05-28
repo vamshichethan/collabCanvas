@@ -60,6 +60,7 @@ type CanvasBoardProps = {
   onJsonExport?: (options: ExportOptions) => Promise<BoardJsonExport>;
   onRecordExport?: (exportType: ExportType) => Promise<void>;
   onExportError?: (message: string) => void;
+  onThumbnailChange?: (thumbnailUrl: string) => void;
   replayObjects?: WhiteboardObject[] | null;
   replayMode?: boolean;
 };
@@ -100,6 +101,7 @@ function CanvasBoard({
   onJsonExport,
   onRecordExport,
   onExportError,
+  onThumbnailChange,
   replayObjects,
   replayMode = false,
 }: CanvasBoardProps) {
@@ -110,6 +112,7 @@ function CanvasBoard({
   const settingsRef = useRef(settings);
   const objectsRef = useRef<WhiteboardObject[]>([]);
   const shapeRef = useRef<FabricObject | Line | null>(null);
+  const thumbnailTimerRef = useRef<number | null>(null);
   const originRef = useRef({ x: 0, y: 0 });
   const isDrawingShapeRef = useRef(false);
   const renderingFromStateRef = useRef(false);
@@ -194,8 +197,20 @@ function CanvasBoard({
       if (options.emit ?? true) {
         emitOperations(previousObjects, nextObjects);
       }
+
+      if ((options.emit ?? true) && onThumbnailChange && !readOnly && !replayMode && canvas) {
+        if (thumbnailTimerRef.current) window.clearTimeout(thumbnailTimerRef.current);
+        thumbnailTimerRef.current = window.setTimeout(() => {
+          try {
+            const thumbnailUrl = canvas.toDataURL({ format: 'png', multiplier: 0.2, enableRetinaScaling: false });
+            onThumbnailChange(thumbnailUrl);
+          } catch {
+            onExportError?.('Unable to update board thumbnail');
+          }
+        }, 900);
+      }
     },
-    [emitOperations, saveHistory],
+    [emitOperations, onExportError, onThumbnailChange, readOnly, replayMode, saveHistory],
   );
 
   const syncObjectsFromCanvas = useCallback(
@@ -496,6 +511,7 @@ function CanvasBoard({
     initializeHistory([]);
 
     return () => {
+      if (thumbnailTimerRef.current) window.clearTimeout(thumbnailTimerRef.current);
       observer.disconnect();
       canvas.dispose();
       canvasRef.current = null;

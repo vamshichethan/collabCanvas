@@ -12,6 +12,18 @@ enum RoomVisibility {
   PRIVATE
 }
 
+enum RoomStatus {
+  ACTIVE
+  ARCHIVED
+  DELETED
+}
+
+enum BoardStatus {
+  ACTIVE
+  ARCHIVED
+  DELETED
+}
+
 enum ParticipantRole {
   OWNER
   EDITOR
@@ -27,6 +39,13 @@ enum OperationType {
 enum ActivityType {
   JOIN
   LEAVE
+  BOARD_CREATE
+  BOARD_RENAME
+  BOARD_DUPLICATE
+  BOARD_ARCHIVE
+  BOARD_RESTORE
+  BOARD_DELETE
+  INVITE_REGENERATE
   OBJECT_CREATE
   OBJECT_DELETE
   COMMENT_ADD
@@ -74,8 +93,13 @@ model User {
 model Room {
   id                     String             @id
   name                   String
+  description            String?
   inviteCode             String             @unique
+  inviteEnabled          Boolean            @default(true)
+  inviteRole             ParticipantRole    @default(VIEWER)
+  inviteExpiresAt        DateTime?
   visibility             RoomVisibility     @default(PRIVATE)
+  status                 RoomStatus         @default(ACTIVE)
   allowViewerComments    Boolean            @default(false)
   allowViewerAISummaries Boolean            @default(false)
   allowViewerExports     Boolean            @default(false)
@@ -92,9 +116,11 @@ model Room {
   exports                BoardExport[]
   createdAt              DateTime           @default(now())
   updatedAt              DateTime           @updatedAt
+  lastActiveAt           DateTime           @default(now())
 
   @@index([ownerId])
   @@index([inviteCode])
+  @@index([status])
 }
 
 model Board {
@@ -102,6 +128,11 @@ model Board {
   roomId             String
   room               Room               @relation(fields: [roomId], references: [id], onDelete: Cascade)
   title              String
+  status             BoardStatus        @default(ACTIVE)
+  thumbnailUrl       String?
+  pinned             Boolean            @default(false)
+  archivedAt         DateTime?
+  deletedAt          DateTime?
   currentState       Json               @default("[]")
   lastSequenceNumber Int                @default(0)
   operations         DrawingOperation[]
@@ -114,6 +145,9 @@ model Board {
   updatedAt          DateTime           @updatedAt
 
   @@index([roomId])
+  @@index([status])
+  @@index([pinned])
+  @@index([updatedAt])
 }
 
 model Participant {
