@@ -182,6 +182,7 @@ export function useRoomCollaboration(roomId: string) {
     socket.io.on('reconnect_attempt', () => setSyncStatus('Reconnecting'));
     socket.on('room:participants', setParticipants);
     socket.on('permission:error', (payload: { message: string }) => setPermissionError(payload.message));
+    socket.on('rate-limit:error', (payload: { message: string }) => setPermissionError(payload.message));
     socket.on('room:error', (payload: { message: string }) => setPermissionError(payload.message));
     socket.on('board:full-sync', (payload: FullSyncPayload) => {
       setInitialBoard(payload.board);

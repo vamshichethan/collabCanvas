@@ -41,6 +41,12 @@ FRONTEND_URL="http://localhost:5173"
 CLIENT_ORIGIN="http://localhost:5173"
 PORT=5000
 GEMINI_API_KEY=""
+REDIS_URL=""
+REDIS_HOST=""
+REDIS_PORT=""
+REDIS_PASSWORD=""
+REDIS_TLS=""
+INSTANCE_ID=""
 ```
 
 ## Build Commands
@@ -93,11 +99,15 @@ backend/
     persistenceManager.ts
     permissionMiddleware.ts
     permissionManager.ts
+    presenceService.ts
     prisma.ts
+    rateLimiter.ts
+    redisClient.ts
     roleGuards.ts
     roomManager.ts
     roomSettingsService.ts
     server.ts
+    socketAdapter.ts
     socketChatHandlers.ts
     socketCommentHandlers.ts
     socketHandlers.ts
@@ -227,6 +237,7 @@ Use Neon PostgreSQL or Supabase PostgreSQL by putting the connection string in `
 - `GET /api/rooms/:roomId/chat` loads room chat history.
 - `GET /api/boards/:boardId/comments` loads object-level comments.
 - `GET /api/rooms/:roomId/activity` loads the room activity feed.
+- `GET /api/health` returns PostgreSQL, Redis, Socket.IO adapter, and instance health.
 - `GET /api/boards/:boardId/ai-summaries` loads saved AI summaries.
 - `POST /api/boards/:boardId/ai-summary` generates and saves an AI summary.
 - `GET /api/boards/:boardId/export/json` returns source-of-truth structured board export JSON.
@@ -328,3 +339,54 @@ The frontend keeps replay state separate from live board state. Entering replay 
 Replay controls include play, pause, restart, next, previous, speed selection, progress slider, timeline details, and exit. While replay mode is active, the drawing toolbar and chat/comment actions are disabled and local operations are not sent. Exiting replay reloads the live board from the backend so replay never mutates real board state.
 
 Owners and editors can replay. Viewers can replay only when `allowViewerReplay` is enabled for the room.
+
+## Redis Scaling
+
+Redis is used only for cross-instance Socket.IO delivery, temporary active presence, and rate-limit counters. PostgreSQL remains the source of truth for users, rooms, boards, drawing operations, comments, chat, versions, snapshots, AI summaries, exports, and replay history.
+
+When `REDIS_URL` or `REDIS_HOST` is configured, the backend creates publisher/subscriber clients with `ioredis` and attaches the `@socket.io/redis-adapter`. Broadcasts such as `operation:applied`, `chat:new`, `comment:new`, participant updates, cursor movement, sync status, and activity feed events can then cross backend instances. If Redis is unavailable or not configured, the app logs a warning and falls back to the default in-memory Socket.IO adapter for single-instance development.
+
+Active presence is stored in Redis as `presence:room:{roomId}`. Each user record includes `userId`, name, `socketId`, `instanceId`, role, and `lastSeenAt`. Presence is updated on join, refreshed every 15 seconds and on cursor movement, filtered by freshness, and removed on disconnect. Stale room presence keys expire with a short TTL.
+
+Redis rate limits protect high-volume actions:
+
+- Cursor movement: 20 events per second per user.
+- Drawing operations: 60 operations per second per user.
+- Chat messages: 10 messages per minute per user.
+- AI summaries: 5 requests per hour per user.
+- Export recording: 20 exports per minute per user.
+
+Rate-limited socket events emit `rate-limit:error`; rate-limited REST routes return `429`.
+
+### Local Redis
+
+Run Redis locally with Docker:
+
+```bash
+docker run --name collabcanvas-redis -p 6379:6379 redis:7-alpine
+```
+
+Then set:
+
+```bash
+REDIS_HOST=localhost
+REDIS_PORT=6379
+```
+
+### Upstash Redis
+
+Create an Upstash Redis database and set `REDIS_URL` to the provided Redis connection string. If your provider requires TLS and you are using host/port variables instead of `REDIS_URL`, set `REDIS_TLS=true`.
+
+### Render Deployment Notes
+
+Set these backend environment variables on Render:
+
+```bash
+DATABASE_URL=...
+FRONTEND_URL=https://your-frontend.example
+REDIS_URL=...
+GEMINI_API_KEY=...
+INSTANCE_ID=render-${RENDER_INSTANCE_ID}
+```
+
+Free Render services can sleep, so multi-instance socket tests may be inconsistent until instances are awake. For reliable scale testing, run two local backend instances on different ports with the same Redis and PostgreSQL, then point two browser clients at different backend URLs and verify drawing, chat, cursors, and participant presence cross instances.

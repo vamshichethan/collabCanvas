@@ -3,6 +3,8 @@ import { ActivityService } from './activityService.js';
 import { OperationManager } from './operationManager.js';
 import { PersistenceManager } from './persistenceManager.js';
 import { PermissionManager } from './permissionManager.js';
+import { PresenceService } from './presenceService.js';
+import { RateLimiter } from './rateLimiter.js';
 import { toDbRole, toSocketRole } from './roleGuards.js';
 import { RoomManager } from './roomManager.js';
 import type { ClientOperation, CursorPosition, Participant } from './types.js';
@@ -13,10 +15,17 @@ type Managers = {
   permissions: PermissionManager;
   persistence: PersistenceManager;
   activity: ActivityService;
+  presence: PresenceService;
+  rateLimiter: RateLimiter;
 };
 
 export const registerSocketHandlers = (io: Server, socket: Socket, managers: Managers) => {
-  const { rooms, operations, permissions, persistence, activity } = managers;
+  const { rooms, operations, permissions, persistence, activity, presence, rateLimiter } = managers;
+  const presenceHeartbeat = setInterval(() => {
+    const roomId = socket.data.roomId as string | undefined;
+    const userId = socket.data.userId as string | undefined;
+    if (roomId && userId) void presence.touch(roomId, userId);
+  }, 15_000);
 
   socket.on('room:create', async (payload: { userId: string; name: string; role?: Participant['role'] }, ack?: (response: { roomId: string }) => void) => {
     try {
@@ -24,12 +33,13 @@ export const registerSocketHandlers = (io: Server, socket: Socket, managers: Man
       const room = rooms.createRoom(persisted.room.id);
       const participant = toParticipant({ ...payload, role: 'owner' }, socket.id);
       rooms.joinRoom(room.roomId, participant);
+      await presence.upsert(room.roomId, participant);
       socket.join(room.roomId);
       socket.data.roomId = room.roomId;
       socket.data.userId = participant.userId;
 
       ack?.({ roomId: room.roomId });
-      emitParticipants(io, rooms, room.roomId);
+      await emitParticipants(io, rooms, presence, room.roomId);
       const boardState = await operations.getBoardState(persisted.board.id);
       socket.emit('board:full-sync', {
         board: boardState.board,
@@ -47,13 +57,14 @@ export const registerSocketHandlers = (io: Server, socket: Socket, managers: Man
       const persistedParticipant = await persistence.joinRoom(roomId, payload.userId, payload.name, 'VIEWER');
       const participant = toParticipant({ ...payload, role: toSocketRole(persistedParticipant.role) }, socket.id);
       rooms.joinRoom(roomId, participant);
+      await presence.upsert(roomId, participant);
       socket.join(roomId);
       socket.data.roomId = roomId;
       socket.data.userId = participant.userId;
 
       ack?.({ ok: true });
       socket.to(roomId).emit('user:joined', participant);
-      emitParticipants(io, rooms, roomId);
+      await emitParticipants(io, rooms, presence, roomId);
       const joinedActivity = await activity.create(roomId, 'JOIN', `${participant.name} joined the room`, participant.userId);
       io.to(roomId).emit('activity:new', joinedActivity);
       const boardState = await operations.getBoardState(roomId);
@@ -69,7 +80,7 @@ export const registerSocketHandlers = (io: Server, socket: Socket, managers: Man
 
   socket.on('room:leave', (payload: { roomId: string; userId: string }) => {
     socket.leave(payload.roomId);
-    leaveRoom(io, rooms, payload.roomId, payload.userId);
+    void leaveRoom(io, rooms, presence, payload.roomId, payload.userId);
     void activity.create(payload.roomId, 'LEAVE', `${payload.userId} left the room`, payload.userId).then((item) => {
       io.to(payload.roomId).emit('activity:new', item);
     });
@@ -77,6 +88,11 @@ export const registerSocketHandlers = (io: Server, socket: Socket, managers: Man
 
   socket.on('operation:submit', async (operation: ClientOperation) => {
     try {
+      const rate = await rateLimiter.check('drawing', operation.userId);
+      if (!rate.allowed) {
+        socket.emit('rate-limit:error', { message: 'Drawing operation rate limit exceeded' });
+        return;
+      }
       const reason = await permissions.validateOperation(operation);
 
       if (reason) {
@@ -133,6 +149,16 @@ export const registerSocketHandlers = (io: Server, socket: Socket, managers: Man
 
       for (const item of payload.operations) {
         try {
+          const rate = await rateLimiter.check('drawing', item.operation.userId);
+          if (!rate.allowed) {
+            acks.push({
+              accepted: false,
+              localId: item.localId,
+              opId: item.operation.opId,
+              reason: 'Drawing operation rate limit exceeded',
+            });
+            continue;
+          }
           const reason = await permissions.validateOperation(item.operation);
           if (reason) {
             acks.push({
@@ -189,7 +215,15 @@ export const registerSocketHandlers = (io: Server, socket: Socket, managers: Man
   });
 
   socket.on('cursor:move', (cursor: CursorPosition) => {
-    socket.to(cursor.roomId).emit('cursor:move', cursor);
+    void (async () => {
+      const rate = await rateLimiter.check('cursor', cursor.userId);
+      if (!rate.allowed) {
+        socket.emit('rate-limit:error', { message: 'Cursor rate limit exceeded' });
+        return;
+      }
+      await presence.touch(cursor.roomId, cursor.userId);
+      socket.to(cursor.roomId).emit('cursor:move', cursor);
+    })();
   });
 
   socket.on('operation:conflict', (payload: { roomId: string; objectIds: string[] }) => {
@@ -240,9 +274,11 @@ export const registerSocketHandlers = (io: Server, socket: Socket, managers: Man
   });
 
   socket.on('disconnect', () => {
+    clearInterval(presenceHeartbeat);
     rooms.removeSocket(socket.id).forEach(({ roomId, participant, participants }) => {
+      void presence.remove(roomId, participant.userId);
       socket.to(roomId).emit('user:left', participant);
-      io.to(roomId).emit('room:participants', participants);
+      void emitParticipants(io, rooms, presence, roomId, participants);
       void activity.create(roomId, 'LEAVE', `${participant.name} left the room`, participant.userId).then((item) => {
         io.to(roomId).emit('activity:new', item);
       });
@@ -258,12 +294,14 @@ const toParticipant = (payload: { userId: string; name: string; role?: Participa
   role: payload.role ?? 'editor',
 });
 
-const emitParticipants = (io: Server, rooms: RoomManager, roomId: string) => {
-  io.to(roomId).emit('room:participants', rooms.getParticipants(roomId));
+const emitParticipants = async (io: Server, rooms: RoomManager, presence: PresenceService, roomId: string, fallback = rooms.getParticipants(roomId)) => {
+  const redisParticipants = await presence.list(roomId);
+  io.to(roomId).emit('room:participants', redisParticipants.length ? redisParticipants : fallback);
 };
 
-const leaveRoom = (io: Server, rooms: RoomManager, roomId: string, userId: string) => {
+const leaveRoom = async (io: Server, rooms: RoomManager, presence: PresenceService, roomId: string, userId: string) => {
   const participants = rooms.leaveRoom(roomId, userId);
+  await presence.remove(roomId, userId);
   io.to(roomId).emit('user:left', { userId });
-  io.to(roomId).emit('room:participants', participants);
+  await emitParticipants(io, rooms, presence, roomId, participants);
 };

@@ -12,8 +12,12 @@ import { ExportService } from './exportService.js';
 import { OperationManager } from './operationManager.js';
 import { PersistenceManager } from './persistenceManager.js';
 import { PermissionManager } from './permissionManager.js';
+import { PresenceService } from './presenceService.js';
 import { prisma } from './prisma.js';
+import { RateLimiter } from './rateLimiter.js';
+import { createRedisClients, instanceId, pingRedis } from './redisClient.js';
 import { RoomManager } from './roomManager.js';
+import { attachSocketAdapter } from './socketAdapter.js';
 import { registerSocketHandlers } from './socketHandlers.js';
 import { registerSocketChatHandlers } from './socketChatHandlers.js';
 import { registerSocketCommentHandlers } from './socketCommentHandlers.js';
@@ -22,10 +26,13 @@ const port = Number(process.env.PORT ?? 5000);
 const clientOrigin = process.env.FRONTEND_URL ?? process.env.CLIENT_ORIGIN ?? 'http://localhost:5173';
 const app = express();
 const httpServer = createServer(app);
+const redis = await createRedisClients();
 const rooms = new RoomManager();
 const persistence = new PersistenceManager(prisma);
 const operations = new OperationManager(persistence);
 const permissions = new PermissionManager(prisma);
+const presence = new PresenceService(redis?.publisher ?? null);
+const rateLimiter = new RateLimiter(redis?.publisher ?? null);
 const activity = new ActivityService(prisma);
 const chat = new ChatService(prisma);
 const comments = new CommentService(prisma);
@@ -35,11 +42,31 @@ const exports = new ExportService(prisma);
 app.use(cors({ origin: clientOrigin }));
 app.use(express.json());
 
-app.get('/health', (_request, response) => {
-  response.json({ ok: true });
+const getHealth = async () => {
+  let postgres = 'connected';
+  try {
+    await prisma.$queryRaw`SELECT 1`;
+  } catch {
+    postgres = 'disconnected';
+  }
+  return {
+    status: 'ok',
+    postgres,
+    redis: await pingRedis(redis?.publisher ?? null),
+    socketAdapter,
+    instanceId,
+  };
+};
+
+app.get('/health', async (_request, response) => {
+  response.json(await getHealth());
 });
 
-app.use('/api', createApiRoutes(persistence, operations, permissions, { chat, comments, activity, aiSummaries, exports }));
+app.get('/api/health', async (_request, response) => {
+  response.json(await getHealth());
+});
+
+app.use('/api', createApiRoutes(persistence, operations, permissions, { chat, comments, activity, aiSummaries, exports, rateLimiter }));
 
 app.use((error: unknown, _request: express.Request, response: express.Response, _next: express.NextFunction) => {
   console.error(error);
@@ -52,10 +79,11 @@ const io = new Server(httpServer, {
     methods: ['GET', 'POST'],
   },
 });
+const socketAdapter = attachSocketAdapter(io, redis);
 
 io.on('connection', (socket) => {
-  registerSocketHandlers(io, socket, { rooms, operations, permissions, persistence, activity });
-  registerSocketChatHandlers(io, socket, { chat, activity, permissions });
+  registerSocketHandlers(io, socket, { rooms, operations, permissions, persistence, activity, presence, rateLimiter });
+  registerSocketChatHandlers(io, socket, { chat, activity, permissions, rateLimiter });
   registerSocketCommentHandlers(io, socket, { comments, activity, permissions });
 });
 

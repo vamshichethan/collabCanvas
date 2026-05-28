@@ -2,11 +2,12 @@ import type { Server, Socket } from 'socket.io';
 import type { ActivityService } from './activityService.js';
 import type { ChatService } from './chatService.js';
 import type { PermissionManager } from './permissionManager.js';
+import type { RateLimiter } from './rateLimiter.js';
 
 export const registerSocketChatHandlers = (
   io: Server,
   socket: Socket,
-  services: { chat: ChatService; activity: ActivityService; permissions: PermissionManager },
+  services: { chat: ChatService; activity: ActivityService; permissions: PermissionManager; rateLimiter: RateLimiter },
 ) => {
   socket.on('chat:history', async (payload: { roomId: string }) => {
     socket.emit('chat:history', await services.chat.list(payload.roomId));
@@ -16,6 +17,11 @@ export const registerSocketChatHandlers = (
     const reason = await services.permissions.canChat(payload.roomId, payload.userId);
     if (reason) {
       socket.emit('permission:error', { message: reason });
+      return;
+    }
+    const rate = await services.rateLimiter.check('chat', payload.userId);
+    if (!rate.allowed) {
+      socket.emit('rate-limit:error', { message: 'Chat rate limit exceeded' });
       return;
     }
 

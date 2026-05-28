@@ -8,6 +8,7 @@ import { OperationManager } from './operationManager.js';
 import { requireRoomAction } from './permissionMiddleware.js';
 import { normalizeRole, PermissionManager } from './permissionManager.js';
 import { PersistenceManager } from './persistenceManager.js';
+import type { RateLimiter } from './rateLimiter.js';
 
 export const createApiRoutes = (
   persistence: PersistenceManager,
@@ -19,6 +20,7 @@ export const createApiRoutes = (
     activity: ActivityService;
     aiSummaries: AISummaryService;
     exports: ExportService;
+    rateLimiter: RateLimiter;
   },
 ) => {
   const router = Router();
@@ -229,6 +231,11 @@ export const createApiRoutes = (
         response.status(403).json({ error: reason });
         return;
       }
+      const rate = await services.rateLimiter.check('ai', userId);
+      if (!rate.allowed) {
+        response.status(429).json({ error: 'AI summary rate limit exceeded' });
+        return;
+      }
 
       response.status(201).json(await services.aiSummaries.generate(request.params.boardId, userId, summaryType));
     } catch (error) {
@@ -303,6 +310,11 @@ export const createApiRoutes = (
       const reason = roomId ? await permissions.canExportBoard(roomId, userId) : 'board not found';
       if (reason) {
         response.status(403).json({ error: reason });
+        return;
+      }
+      const rate = await services.rateLimiter.check('export', userId);
+      if (!rate.allowed) {
+        response.status(429).json({ error: 'Export rate limit exceeded' });
         return;
       }
 
