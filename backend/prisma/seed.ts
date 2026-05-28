@@ -1,15 +1,20 @@
 import { PrismaClient } from '@prisma/client';
+import bcrypt from 'bcryptjs';
 
 const prisma = new PrismaClient();
 
 async function main() {
+  const demoPasswordHash = await bcrypt.hash('Demo1234', 12);
   const user = await prisma.user.upsert({
     where: { id: 'demo-user' },
-    update: {},
+    update: {
+      passwordHash: demoPasswordHash,
+    },
     create: {
       id: 'demo-user',
       name: 'Demo User',
       email: 'demo@collabcanvas.local',
+      passwordHash: demoPasswordHash,
     },
   });
 

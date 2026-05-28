@@ -29,9 +29,10 @@ export const registerSocketHandlers = (io: Server, socket: Socket, managers: Man
 
   socket.on('room:create', async (payload: { userId: string; name: string; role?: Participant['role'] }, ack?: (response: { roomId: string }) => void) => {
     try {
-      const persisted = await persistence.createRoom(payload.userId, payload.name);
+      const authUser = socket.data.user as { id: string; name: string };
+      const persisted = await persistence.createRoom(authUser.id, authUser.name);
       const room = rooms.createRoom(persisted.room.id);
-      const participant = toParticipant({ ...payload, role: 'owner' }, socket.id);
+      const participant = toParticipant({ userId: authUser.id, name: authUser.name, role: 'owner' }, socket.id);
       rooms.joinRoom(room.roomId, participant);
       await presence.upsert(room.roomId, participant);
       socket.join(room.roomId);
@@ -54,8 +55,14 @@ export const registerSocketHandlers = (io: Server, socket: Socket, managers: Man
   socket.on('room:join', async (payload: { roomId: string; userId: string; name: string; role?: Participant['role'] }, ack?: (response: { ok: boolean }) => void) => {
     try {
       const roomId = payload.roomId.trim();
-      const persistedParticipant = await persistence.joinRoom(roomId, payload.userId, payload.name, 'VIEWER');
-      const participant = toParticipant({ ...payload, role: toSocketRole(persistedParticipant.role) }, socket.id);
+      const authUser = socket.data.user as { id: string; name: string };
+      const room = await persistence.getRoom(roomId);
+      if (!room || (room.visibility !== 'PUBLIC' && !room.participants.some((participant) => participant.userId === authUser.id))) {
+        socket.emit('room:error', { message: 'Room is private or invite is required' });
+        return;
+      }
+      const persistedParticipant = await persistence.joinRoom(roomId, authUser.id, authUser.name, 'VIEWER');
+      const participant = toParticipant({ userId: authUser.id, name: authUser.name, role: toSocketRole(persistedParticipant.role) }, socket.id);
       rooms.joinRoom(roomId, participant);
       await presence.upsert(roomId, participant);
       socket.join(roomId);
@@ -79,15 +86,17 @@ export const registerSocketHandlers = (io: Server, socket: Socket, managers: Man
   });
 
   socket.on('room:leave', (payload: { roomId: string; userId: string }) => {
+    const userId = socket.data.userId as string;
     socket.leave(payload.roomId);
-    void leaveRoom(io, rooms, presence, payload.roomId, payload.userId);
-    void activity.create(payload.roomId, 'LEAVE', `${payload.userId} left the room`, payload.userId).then((item) => {
+    void leaveRoom(io, rooms, presence, payload.roomId, userId);
+    void activity.create(payload.roomId, 'LEAVE', `${userId} left the room`, userId).then((item) => {
       io.to(payload.roomId).emit('activity:new', item);
     });
   });
 
   socket.on('operation:submit', async (operation: ClientOperation) => {
     try {
+      operation.userId = socket.data.userId;
       const rate = await rateLimiter.check('drawing', operation.userId);
       if (!rate.allowed) {
         socket.emit('rate-limit:error', { message: 'Drawing operation rate limit exceeded' });
@@ -149,6 +158,7 @@ export const registerSocketHandlers = (io: Server, socket: Socket, managers: Man
 
       for (const item of payload.operations) {
         try {
+          item.operation.userId = socket.data.userId;
           const rate = await rateLimiter.check('drawing', item.operation.userId);
           if (!rate.allowed) {
             acks.push({
@@ -216,6 +226,8 @@ export const registerSocketHandlers = (io: Server, socket: Socket, managers: Man
 
   socket.on('cursor:move', (cursor: CursorPosition) => {
     void (async () => {
+      cursor.userId = socket.data.userId;
+      cursor.name = (socket.data.user as { name?: string } | undefined)?.name ?? cursor.name;
       const rate = await rateLimiter.check('cursor', cursor.userId);
       if (!rate.allowed) {
         socket.emit('rate-limit:error', { message: 'Cursor rate limit exceeded' });
@@ -234,7 +246,8 @@ export const registerSocketHandlers = (io: Server, socket: Socket, managers: Man
   });
 
   socket.on('participant:invite', async (payload: { roomId: string; actorId: string; userId: string; name: string; role: string }) => {
-    const reason = await permissions.requireAction(payload.roomId, payload.actorId, 'INVITE');
+    const actorId = socket.data.userId as string;
+    const reason = await permissions.requireAction(payload.roomId, actorId, 'INVITE');
     if (reason) {
       socket.emit('permission:error', { message: reason });
       return;
@@ -244,7 +257,8 @@ export const registerSocketHandlers = (io: Server, socket: Socket, managers: Man
   });
 
   socket.on('participant:remove', async (payload: { roomId: string; actorId: string; userId: string }) => {
-    const reason = await permissions.canManageParticipant(payload.roomId, payload.actorId);
+    const actorId = socket.data.userId as string;
+    const reason = await permissions.canManageParticipant(payload.roomId, actorId);
     if (reason) {
       socket.emit('permission:error', { message: reason });
       return;
@@ -254,7 +268,8 @@ export const registerSocketHandlers = (io: Server, socket: Socket, managers: Man
   });
 
   socket.on('participant:role-update', async (payload: { roomId: string; actorId: string; userId: string; role: string }) => {
-    const reason = await permissions.canManageParticipant(payload.roomId, payload.actorId);
+    const actorId = socket.data.userId as string;
+    const reason = await permissions.canManageParticipant(payload.roomId, actorId);
     if (reason) {
       socket.emit('permission:error', { message: reason });
       return;
@@ -264,7 +279,8 @@ export const registerSocketHandlers = (io: Server, socket: Socket, managers: Man
   });
 
   socket.on('room:settings-update', async (payload: { roomId: string; actorId: string; settings: Parameters<PersistenceManager['updateRoomSettings']>[1] }) => {
-    const reason = await permissions.canUpdateSettings(payload.roomId, payload.actorId);
+    const actorId = socket.data.userId as string;
+    const reason = await permissions.canUpdateSettings(payload.roomId, actorId);
     if (reason) {
       socket.emit('permission:error', { message: reason });
       return;

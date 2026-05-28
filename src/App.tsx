@@ -1,18 +1,21 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type FormEvent } from 'react';
 import CanvasBoard from './components/CanvasBoard';
 import CollaborationSidebar from './components/CollaborationSidebar';
 import ParticipantPanel from './components/ParticipantPanel';
 import RoomSettingsPanel from './components/RoomSettingsPanel';
 import Toolbar from './components/Toolbar';
 import VersionHistoryPanel from './components/VersionHistoryPanel';
-import { getOrCreateIdentity, useRoomCollaboration } from './hooks/useRoomCollaboration';
+import { useRoomCollaboration } from './hooks/useRoomCollaboration';
 import { api } from './lib/api';
 import { buildReplayCache, buildReplayState } from './lib/replay';
 import { getRoomIdFromPath, navigateToRoom } from './lib/room';
-import type { AISummaryRecord, DashboardRoom, DrawingSettings, ReplayOperation, SummaryType, Tool, WhiteboardObject } from './types';
+import type { AISummaryRecord, AuthUser, DashboardRoom, DrawingSettings, ReplayOperation, SummaryType, Tool, WhiteboardObject } from './types';
 
 function App() {
   const [roomId, setRoomId] = useState(getRoomIdFromPath());
+  const [authUser, setAuthUser] = useState<AuthUser | null>(null);
+  const [authLoading, setAuthLoading] = useState(true);
+  const [authMode, setAuthMode] = useState<'login' | 'signup'>(window.location.pathname === '/signup' ? 'signup' : 'login');
 
   useEffect(() => {
     const handleRouteChange = () => setRoomId(getRoomIdFromPath());
@@ -20,11 +23,34 @@ function App() {
     return () => window.removeEventListener('popstate', handleRouteChange);
   }, []);
 
-  return roomId ? <RoomPage roomId={roomId} /> : <DashboardPage />;
+  useEffect(() => {
+    api
+      .me()
+      .then(({ user }) => setAuthUser(user))
+      .catch(() => setAuthUser(null))
+      .finally(() => setAuthLoading(false));
+  }, []);
+
+  const handleLogout = async () => {
+    await api.logout();
+    setAuthUser(null);
+    window.history.pushState({}, '', '/login');
+    setRoomId(null);
+    setAuthMode('login');
+  };
+
+  if (authLoading) {
+    return <main className="grid min-h-screen place-items-center bg-[#f4f7fb] text-sm font-semibold text-slate-500">Loading session...</main>;
+  }
+
+  if (!authUser) {
+    return <AuthPage mode={authMode} onModeChange={setAuthMode} onAuthed={setAuthUser} />;
+  }
+
+  return roomId ? <RoomPage roomId={roomId} authUser={authUser} onLogout={handleLogout} /> : <DashboardPage authUser={authUser} onLogout={handleLogout} />;
 }
 
-function DashboardPage() {
-  const identity = useMemo(getOrCreateIdentity, []);
+function DashboardPage({ authUser, onLogout }: { authUser: AuthUser; onLogout: () => void }) {
   const [rooms, setRooms] = useState<DashboardRoom[]>([]);
   const [joinValue, setJoinValue] = useState('');
   const [loading, setLoading] = useState(true);
@@ -33,7 +59,7 @@ function DashboardPage() {
   const loadRooms = async () => {
     setLoading(true);
     try {
-      setRooms(await api.listRooms(identity.userId));
+      setRooms(await api.listRooms());
     } catch {
       setRooms([]);
     } finally {
@@ -47,7 +73,7 @@ function DashboardPage() {
 
   const createRoom = async () => {
     setCreating(true);
-    const created = await api.createRoom(identity.userId, identity.name);
+    const created = await api.createRoom();
     setCreating(false);
     navigateToRoom(created.room.id);
   };
@@ -65,16 +91,25 @@ function DashboardPage() {
           <div>
             <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">CollabCanvas</p>
             <h1 className="mt-2 text-3xl font-semibold">Dashboard</h1>
-            <p className="mt-1 text-sm text-slate-500">Rooms and persisted boards for {identity.name}</p>
+            <p className="mt-1 text-sm text-slate-500">Rooms and persisted boards for {authUser.name}</p>
           </div>
-          <button
-            type="button"
-            onClick={createRoom}
-            disabled={creating}
-            className="rounded-lg bg-blue-600 px-4 py-3 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            {creating ? 'Creating...' : 'Create room'}
-          </button>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={createRoom}
+              disabled={creating}
+              className="rounded-lg bg-blue-600 px-4 py-3 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {creating ? 'Creating...' : 'Create room'}
+            </button>
+            <button
+              type="button"
+              onClick={onLogout}
+              className="rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+            >
+              Logout
+            </button>
+          </div>
         </div>
 
         <div className="mt-4 flex flex-col gap-3 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:flex-row">
@@ -123,7 +158,118 @@ function DashboardPage() {
   );
 }
 
-function RoomPage({ roomId }: { roomId: string }) {
+function AuthPage({
+  mode,
+  onModeChange,
+  onAuthed,
+}: {
+  mode: 'login' | 'signup';
+  onModeChange: (mode: 'login' | 'signup') => void;
+  onAuthed: (user: AuthUser) => void;
+}) {
+  const [name, setName] = useState('');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const isSignup = mode === 'signup';
+
+  const switchMode = (nextMode: 'login' | 'signup') => {
+    setError(null);
+    onModeChange(nextMode);
+    window.history.pushState({}, '', nextMode === 'signup' ? '/signup' : '/login');
+  };
+
+  const submit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setSubmitting(true);
+    setError(null);
+
+    try {
+      const result = isSignup ? await api.signup({ name, email, password }) : await api.login({ email, password });
+      onAuthed(result.user);
+      window.history.pushState({}, '', '/');
+    } catch (submitError) {
+      setError(submitError instanceof Error ? submitError.message : 'Authentication failed');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <main className="grid min-h-screen place-items-center bg-[#f4f7fb] px-4 py-10 text-slate-950">
+      <section className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-6 shadow-board">
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-blue-500">CollabCanvas</p>
+          <h1 className="mt-2 text-3xl font-semibold">{isSignup ? 'Create your account' : 'Welcome back'}</h1>
+          <p className="mt-2 text-sm text-slate-500">
+            {isSignup ? 'Start a secure whiteboard session with your real account.' : 'Sign in to open your rooms and boards.'}
+          </p>
+        </div>
+
+        <form className="mt-6 space-y-4" onSubmit={submit}>
+          {isSignup ? (
+            <label className="block text-sm font-semibold text-slate-700">
+              Name
+              <input
+                value={name}
+                onChange={(event) => setName(event.target.value)}
+                autoComplete="name"
+                className="mt-2 w-full rounded-lg border border-slate-200 px-3 py-3 text-sm font-medium outline-none transition focus:border-blue-500"
+                required
+              />
+            </label>
+          ) : null}
+
+          <label className="block text-sm font-semibold text-slate-700">
+            Email
+            <input
+              value={email}
+              onChange={(event) => setEmail(event.target.value)}
+              type="email"
+              autoComplete="email"
+              className="mt-2 w-full rounded-lg border border-slate-200 px-3 py-3 text-sm font-medium outline-none transition focus:border-blue-500"
+              required
+            />
+          </label>
+
+          <label className="block text-sm font-semibold text-slate-700">
+            Password
+            <input
+              value={password}
+              onChange={(event) => setPassword(event.target.value)}
+              type="password"
+              autoComplete={isSignup ? 'new-password' : 'current-password'}
+              className="mt-2 w-full rounded-lg border border-slate-200 px-3 py-3 text-sm font-medium outline-none transition focus:border-blue-500"
+              required
+            />
+          </label>
+
+          {isSignup ? <p className="text-xs font-medium text-slate-500">Use 8+ characters with uppercase, lowercase, and a number.</p> : null}
+
+          {error ? <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm font-semibold text-red-700">{error}</div> : null}
+
+          <button
+            type="submit"
+            disabled={submitting}
+            className="w-full rounded-lg bg-blue-600 px-4 py-3 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {submitting ? 'Please wait...' : isSignup ? 'Sign up' : 'Log in'}
+          </button>
+        </form>
+
+        <div className="mt-5 border-t border-slate-100 pt-4 text-center text-sm text-slate-500">
+          {isSignup ? 'Already have an account?' : 'Need an account?'}{' '}
+          <button type="button" onClick={() => switchMode(isSignup ? 'login' : 'signup')} className="font-semibold text-blue-600 hover:text-blue-700">
+            {isSignup ? 'Log in' : 'Sign up'}
+          </button>
+        </div>
+      </section>
+    </main>
+  );
+}
+
+function RoomPage({ roomId, authUser, onLogout }: { roomId: string; authUser: AuthUser; onLogout: () => void }) {
   const [activeTool, setActiveTool] = useState<Tool>('select');
   const [settings, setSettings] = useState<DrawingSettings>({
     color: '#2563eb',
@@ -144,7 +290,7 @@ function RoomPage({ roomId }: { roomId: string }) {
   const [replaySpeed, setReplaySpeed] = useState(1);
   const [replayLoading, setReplayLoading] = useState(false);
   const inviteLink = useMemo(() => `${window.location.origin}/room/${roomId}`, [roomId]);
-  const collaboration = useRoomCollaboration(roomId);
+  const collaboration = useRoomCollaboration(roomId, authUser);
   const currentDbParticipant = room?.participants.find((participant) => participant.userId === collaboration.userId);
   const currentRole = currentDbParticipant?.role ?? roleToDb(collaboration.currentRole);
   const isOwner = currentRole === 'OWNER';
@@ -401,7 +547,14 @@ function RoomPage({ roomId }: { roomId: string }) {
             >
               {replayLoading ? 'Loading replay' : 'Replay'}
             </button>
-            <p className="text-xs font-medium uppercase tracking-[0.18em] text-slate-400">Phase 11</p>
+            <button
+              type="button"
+              onClick={onLogout}
+              className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+            >
+              Logout
+            </button>
+            <p className="text-xs font-medium uppercase tracking-[0.18em] text-slate-400">Phase 13</p>
           </div>
         </div>
       </header>

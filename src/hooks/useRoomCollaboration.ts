@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { io, type Socket } from 'socket.io-client';
 import { api } from '../lib/api';
 import { getBrowserOnline, subscribeConnectionStatus } from '../lib/connectionStatus';
-import { createClientId } from '../lib/ids';
 import { offlineQueue } from '../lib/offlineQueue';
 import { findOfflineConflicts, toBatchPayload } from '../lib/syncManager';
 import type {
@@ -17,6 +16,7 @@ import type {
   Participant,
   QueuedOperation,
   SyncStatus,
+  AuthUser,
   WhiteboardObject,
 } from '../types';
 
@@ -32,20 +32,8 @@ type MissedResponsePayload = {
   lastSequenceNumber: number;
 };
 
-export const getOrCreateIdentity = () => {
-  const storedUserId = localStorage.getItem('collabcanvas:userId');
-  const userId = storedUserId ?? createClientId('user');
-  if (!storedUserId) localStorage.setItem('collabcanvas:userId', userId);
-
-  const storedName = localStorage.getItem('collabcanvas:name');
-  const name = storedName ?? `User ${userId.slice(-4)}`;
-  if (!storedName) localStorage.setItem('collabcanvas:name', name);
-
-  return { userId, name, role: 'editor' as const };
-};
-
-export function useRoomCollaboration(roomId: string) {
-  const identity = useMemo(getOrCreateIdentity, []);
+export function useRoomCollaboration(roomId: string, authUser: AuthUser) {
+  const identity = useMemo(() => ({ userId: authUser.id, name: authUser.name, role: 'editor' as const }), [authUser.id, authUser.name]);
   const socketRef = useRef<Socket | null>(null);
   const lastCursorEmit = useRef(0);
   const lastSeenSequenceNumber = useRef(Number(localStorage.getItem(`collabcanvas:${roomId}:lastSequence`) ?? 0));
@@ -152,6 +140,7 @@ export function useRoomCollaboration(roomId: string) {
     const socket = io(socketUrl, {
       transports: ['websocket'],
       reconnection: true,
+      withCredentials: true,
     });
     socketRef.current = socket;
 

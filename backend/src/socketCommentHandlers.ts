@@ -13,15 +13,16 @@ export const registerSocketCommentHandlers = (
   });
 
   socket.on('comment:add', async (payload: { roomId: string; boardId: string; objectId: string; userId: string; message: string }) => {
-    const reason = await services.permissions.canComment(payload.roomId, payload.userId);
+    const userId = socket.data.userId as string;
+    const reason = await services.permissions.canComment(payload.roomId, userId);
     if (reason) {
       socket.emit('permission:error', { message: reason });
       return;
     }
 
     try {
-      const comment = await services.comments.add(payload.boardId, payload.objectId, payload.userId, payload.message);
-      const activity = await services.activity.create(payload.roomId, 'COMMENT_ADD', `${comment.userName} commented on an object`, payload.userId);
+      const comment = await services.comments.add(payload.boardId, payload.objectId, userId, payload.message);
+      const activity = await services.activity.create(payload.roomId, 'COMMENT_ADD', `${comment.userName} commented on an object`, userId);
       io.to(payload.roomId).emit('comment:new', comment);
       io.to(payload.roomId).emit('activity:new', activity);
     } catch (error) {
@@ -31,7 +32,8 @@ export const registerSocketCommentHandlers = (
   });
 
   socket.on('comment:resolve', async (payload: { roomId: string; commentId: string; userId: string; resolved: boolean }) => {
-    const reason = await services.permissions.canResolveComment(payload.roomId, payload.userId);
+    const userId = socket.data.userId as string;
+    const reason = await services.permissions.canResolveComment(payload.roomId, userId);
     if (reason) {
       socket.emit('permission:error', { message: reason });
       return;
@@ -41,10 +43,11 @@ export const registerSocketCommentHandlers = (
   });
 
   socket.on('comment:delete', async (payload: { roomId: string; commentId: string; userId: string }) => {
+    const userId = socket.data.userId as string;
     const existing = await services.comments.get(payload.commentId);
     if (!existing) return;
 
-    const reason = await services.permissions.canDeleteComment(payload.roomId, payload.userId, existing.userId);
+    const reason = await services.permissions.canDeleteComment(payload.roomId, userId, existing.userId);
     if (reason) {
       socket.emit('permission:error', { message: reason });
       return;

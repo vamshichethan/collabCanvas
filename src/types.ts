@@ -8,6 +8,13 @@ export type DrawingSettings = {
   strokeWidth: number;
 };
 
+export type AuthUser = {
+  id: string;
+  name: string;
+  email: string | null;
+  avatarUrl: string | null;
+};
+
 export type ToolDefinition = {
   id: Tool;
   label: string;

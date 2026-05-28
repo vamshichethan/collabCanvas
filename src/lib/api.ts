@@ -1,6 +1,7 @@
 import type {
   ActivityItem,
   AISummaryRecord,
+  AuthUser,
   BoardExportRecord,
   BoardJsonExport,
   BoardVersionRecord,
@@ -16,14 +17,36 @@ import type {
 const apiUrl = import.meta.env.VITE_API_URL ?? 'http://localhost:5000';
 
 export const api = {
-  async listRooms(userId: string) {
-    return request<DashboardRoom[]>(`/api/rooms?userId=${encodeURIComponent(userId)}`);
+  async signup(input: { name: string; email: string; password: string }) {
+    return request<{ user: AuthUser }>('/api/auth/signup', {
+      method: 'POST',
+      body: JSON.stringify(input),
+    });
   },
 
-  async createRoom(userId: string, name: string) {
+  async login(input: { email: string; password: string }) {
+    return request<{ user: AuthUser }>('/api/auth/login', {
+      method: 'POST',
+      body: JSON.stringify(input),
+    });
+  },
+
+  async logout() {
+    return request<{ ok: boolean }>('/api/auth/logout', { method: 'POST' });
+  },
+
+  async me() {
+    return request<{ user: AuthUser }>('/api/auth/me');
+  },
+
+  async listRooms(_userId?: string) {
+    return request<DashboardRoom[]>('/api/rooms');
+  },
+
+  async createRoom(_userId?: string, _name?: string) {
     return request<{ room: DashboardRoom; board: { id: string } }>('/api/rooms', {
       method: 'POST',
-      body: JSON.stringify({ userId, name }),
+      body: JSON.stringify({}),
     });
   },
 
@@ -146,6 +169,7 @@ export const api = {
 async function request<T>(path: string, init: RequestInit = {}) {
   const response = await fetch(`${apiUrl}${path}`, {
     ...init,
+    credentials: 'include',
     headers: {
       'Content-Type': 'application/json',
       ...init.headers,

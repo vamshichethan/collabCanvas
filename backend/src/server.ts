@@ -1,9 +1,12 @@
 import 'dotenv/config';
+import cookieParser from 'cookie-parser';
 import cors from 'cors';
 import express from 'express';
 import { createServer } from 'node:http';
 import { Server } from 'socket.io';
 import { ActivityService } from './activityService.js';
+import { authCookieName, getUserFromToken, parseCookies } from './auth.js';
+import { createAuthRoutes } from './authRoutes.js';
 import { AISummaryService } from './aiSummaryService.js';
 import { createApiRoutes } from './apiRoutes.js';
 import { ChatService } from './chatService.js';
@@ -39,7 +42,8 @@ const comments = new CommentService(prisma);
 const aiSummaries = new AISummaryService(prisma);
 const exports = new ExportService(prisma);
 
-app.use(cors({ origin: clientOrigin }));
+app.use(cors({ origin: clientOrigin, credentials: true }));
+app.use(cookieParser(process.env.COOKIE_SECRET));
 app.use(express.json());
 
 const getHealth = async () => {
@@ -66,6 +70,7 @@ app.get('/api/health', async (_request, response) => {
   response.json(await getHealth());
 });
 
+app.use('/api/auth', createAuthRoutes());
 app.use('/api', createApiRoutes(persistence, operations, permissions, { chat, comments, activity, aiSummaries, exports, rateLimiter }));
 
 app.use((error: unknown, _request: express.Request, response: express.Response, _next: express.NextFunction) => {
@@ -77,9 +82,22 @@ const io = new Server(httpServer, {
   cors: {
     origin: clientOrigin,
     methods: ['GET', 'POST'],
+    credentials: true,
   },
 });
 const socketAdapter = attachSocketAdapter(io, redis);
+
+io.use(async (socket, next) => {
+  const cookies = parseCookies(socket.handshake.headers.cookie);
+  const user = await getUserFromToken(cookies[authCookieName]);
+  if (!user) {
+    next(new Error('Authentication required'));
+    return;
+  }
+  socket.data.user = user;
+  socket.data.userId = user.id;
+  next();
+});
 
 io.on('connection', (socket) => {
   registerSocketHandlers(io, socket, { rooms, operations, permissions, persistence, activity, presence, rateLimiter });

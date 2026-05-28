@@ -14,19 +14,20 @@ export const registerSocketChatHandlers = (
   });
 
   socket.on('chat:send', async (payload: { roomId: string; userId: string; message: string }) => {
-    const reason = await services.permissions.canChat(payload.roomId, payload.userId);
+    const userId = socket.data.userId as string;
+    const reason = await services.permissions.canChat(payload.roomId, userId);
     if (reason) {
       socket.emit('permission:error', { message: reason });
       return;
     }
-    const rate = await services.rateLimiter.check('chat', payload.userId);
+    const rate = await services.rateLimiter.check('chat', userId);
     if (!rate.allowed) {
       socket.emit('rate-limit:error', { message: 'Chat rate limit exceeded' });
       return;
     }
 
     try {
-      const message = await services.chat.create(payload.roomId, payload.userId, payload.message);
+      const message = await services.chat.create(payload.roomId, userId, payload.message);
       io.to(payload.roomId).emit('chat:new', message);
     } catch (error) {
       socket.emit('permission:error', { message: 'Unable to send chat message' });

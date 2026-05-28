@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import type { ActivityService } from './activityService.js';
+import { requireAuth, type AuthenticatedRequest } from './auth.js';
 import { isSummaryType, type AISummaryService } from './aiSummaryService.js';
 import type { ChatService } from './chatService.js';
 import type { CommentService } from './commentService.js';
@@ -9,6 +10,8 @@ import { requireRoomAction } from './permissionMiddleware.js';
 import { normalizeRole, PermissionManager } from './permissionManager.js';
 import { PersistenceManager } from './persistenceManager.js';
 import type { RateLimiter } from './rateLimiter.js';
+
+const getAuthUser = (request: unknown) => (request as AuthenticatedRequest).user;
 
 export const createApiRoutes = (
   persistence: PersistenceManager,
@@ -24,10 +27,11 @@ export const createApiRoutes = (
   },
 ) => {
   const router = Router();
+  router.use(requireAuth);
 
   router.get('/rooms', async (request, response, next) => {
     try {
-      const userId = String(request.query.userId ?? 'demo-user');
+      const userId = getAuthUser(request).id;
       response.json(await persistence.getDashboardRooms(userId));
     } catch (error) {
       next(error);
@@ -36,8 +40,8 @@ export const createApiRoutes = (
 
   router.post('/rooms', async (request, response, next) => {
     try {
-      const { userId = 'demo-user', name = 'Demo User' } = request.body ?? {};
-      const room = await persistence.createRoom(userId, name);
+      const user = getAuthUser(request);
+      const room = await persistence.createRoom(user.id, user.name);
       response.status(201).json(room);
     } catch (error) {
       next(error);
@@ -46,9 +50,14 @@ export const createApiRoutes = (
 
   router.get('/rooms/:roomId', async (request, response, next) => {
     try {
+      const userId = getAuthUser(request).id;
       const room = await persistence.getRoom(request.params.roomId);
       if (!room) {
         response.status(404).json({ error: 'Room not found' });
+        return;
+      }
+      if (room.visibility !== 'PUBLIC' && !room.participants.some((participant) => participant.userId === userId)) {
+        response.status(403).json({ error: 'Room is private or invite is required' });
         return;
       }
       response.json(room);
@@ -59,8 +68,13 @@ export const createApiRoutes = (
 
   router.post('/rooms/:roomId/join', async (request, response, next) => {
     try {
-      const { userId = 'demo-user', name = 'Demo User' } = request.body ?? {};
-      await persistence.joinRoom(request.params.roomId, userId, name, 'VIEWER');
+      const user = getAuthUser(request);
+      const room = await persistence.getRoom(request.params.roomId);
+      if (!room || (room.visibility !== 'PUBLIC' && !room.participants.some((participant) => participant.userId === user.id))) {
+        response.status(403).json({ error: 'Room is private or invite is required' });
+        return;
+      }
+      await persistence.joinRoom(request.params.roomId, user.id, user.name, 'VIEWER');
       response.json({ ok: true });
     } catch (error) {
       next(error);
@@ -77,7 +91,7 @@ export const createApiRoutes = (
 
   router.post('/rooms/:roomId/regenerate-invite', async (request, response, next) => {
     try {
-      const userId = String(request.body?.userId ?? '');
+      const userId = getAuthUser(request).id;
       const reason = await permissions.requireAction(request.params.roomId, userId, 'INVITE');
       if (reason) {
         response.status(403).json({ error: reason });
@@ -91,7 +105,7 @@ export const createApiRoutes = (
 
   router.post('/rooms/:roomId/participants', async (request, response, next) => {
     try {
-      const actorId = String(request.body?.actorId ?? '');
+      const actorId = getAuthUser(request).id;
       const reason = await permissions.requireAction(request.params.roomId, actorId, 'INVITE');
       if (reason) {
         response.status(403).json({ error: reason });
@@ -106,7 +120,7 @@ export const createApiRoutes = (
 
   router.patch('/rooms/:roomId/participants/:userId', async (request, response, next) => {
     try {
-      const actorId = String(request.body?.actorId ?? '');
+      const actorId = getAuthUser(request).id;
       const reason = await permissions.canManageParticipant(request.params.roomId, actorId);
       if (reason) {
         response.status(403).json({ error: reason });
@@ -122,7 +136,7 @@ export const createApiRoutes = (
 
   router.delete('/rooms/:roomId/participants/:userId', async (request, response, next) => {
     try {
-      const actorId = String(request.query.actorId ?? '');
+      const actorId = getAuthUser(request).id;
       const reason = await permissions.canManageParticipant(request.params.roomId, actorId);
       if (reason) {
         response.status(403).json({ error: reason });
@@ -136,7 +150,7 @@ export const createApiRoutes = (
 
   router.post('/rooms/:roomId/transfer-owner', async (request, response, next) => {
     try {
-      const actorId = String(request.body?.actorId ?? '');
+      const actorId = getAuthUser(request).id;
       const reason = await permissions.assertOwner(request.params.roomId, actorId);
       if (reason) {
         response.status(403).json({ error: reason });
@@ -167,7 +181,7 @@ export const createApiRoutes = (
   router.post('/boards/:boardId/versions', async (request, response, next) => {
     try {
       const roomId = await persistence.getBoardRoomId(request.params.boardId);
-      const createdBy = String(request.body?.createdBy ?? 'demo-user');
+      const createdBy = getAuthUser(request).id;
       const reason = roomId ? await permissions.canCreateVersion(roomId, createdBy) : 'board not found';
       if (reason) {
         response.status(403).json({ error: reason });
@@ -185,7 +199,7 @@ export const createApiRoutes = (
   router.post('/boards/:boardId/restore/:versionId', async (request, response, next) => {
     try {
       const roomId = await persistence.getBoardRoomId(request.params.boardId);
-      const userId = String(request.body?.userId ?? 'demo-user');
+      const userId = getAuthUser(request).id;
       const reason = roomId ? await permissions.canRestoreVersion(roomId, userId) : 'board not found';
       if (reason) {
         response.status(403).json({ error: reason });
@@ -219,7 +233,7 @@ export const createApiRoutes = (
   router.post('/boards/:boardId/ai-summary', async (request, response, next) => {
     try {
       const roomId = await persistence.getBoardRoomId(request.params.boardId);
-      const userId = String(request.body?.userId ?? request.body?.generatedBy ?? '');
+      const userId = getAuthUser(request).id;
       const summaryType = request.body?.summaryType;
       if (!isSummaryType(summaryType)) {
         response.status(400).json({ error: 'summaryType is invalid' });
@@ -259,7 +273,7 @@ export const createApiRoutes = (
   router.get('/boards/:boardId/export/json', async (request, response, next) => {
     try {
       const roomId = await persistence.getBoardRoomId(request.params.boardId);
-      const userId = String(request.query.userId ?? '');
+      const userId = getAuthUser(request).id;
       const reason = roomId ? await permissions.canExportBoard(roomId, userId) : 'board not found';
       if (reason) {
         response.status(403).json({ error: reason });
@@ -281,7 +295,7 @@ export const createApiRoutes = (
   router.get('/boards/:boardId/replay', async (request, response, next) => {
     try {
       const roomId = await persistence.getBoardRoomId(request.params.boardId);
-      const userId = String(request.query.userId ?? '');
+      const userId = getAuthUser(request).id;
       const reason = roomId ? await permissions.canReplayBoard(roomId, userId) : 'board not found';
       if (reason) {
         response.status(403).json({ error: reason });
@@ -300,7 +314,7 @@ export const createApiRoutes = (
   router.post('/boards/:boardId/export/record', async (request, response, next) => {
     try {
       const roomId = await persistence.getBoardRoomId(request.params.boardId);
-      const userId = String(request.body?.userId ?? request.body?.exportedBy ?? '');
+      const userId = getAuthUser(request).id;
       const exportType = request.body?.exportType;
       if (!isExportType(exportType)) {
         response.status(400).json({ error: 'exportType is invalid' });
@@ -353,7 +367,7 @@ export const createApiRoutes = (
   router.post('/boards/:boardId/comments', async (request, response, next) => {
     try {
       const roomId = await persistence.getBoardRoomId(request.params.boardId);
-      const userId = String(request.body?.userId ?? '');
+      const userId = getAuthUser(request).id;
       const reason = roomId ? await permissions.canComment(roomId, userId) : 'board not found';
       if (reason) {
         response.status(403).json({ error: reason });
@@ -369,7 +383,7 @@ export const createApiRoutes = (
 
   router.post('/rooms/:roomId/chat', async (request, response, next) => {
     try {
-      const userId = String(request.body?.userId ?? '');
+      const userId = getAuthUser(request).id;
       const reason = await permissions.canChat(request.params.roomId, userId);
       if (reason) {
         response.status(403).json({ error: reason });
