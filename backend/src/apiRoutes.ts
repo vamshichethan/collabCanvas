@@ -271,6 +271,25 @@ export const createApiRoutes = (
     }
   });
 
+  router.get('/boards/:boardId/replay', async (request, response, next) => {
+    try {
+      const roomId = await persistence.getBoardRoomId(request.params.boardId);
+      const userId = String(request.query.userId ?? '');
+      const reason = roomId ? await permissions.canReplayBoard(roomId, userId) : 'board not found';
+      if (reason) {
+        response.status(403).json({ error: reason });
+        return;
+      }
+
+      const replay = await persistence.getReplayOperations(request.params.boardId);
+      const userName = await persistence.getUserName(userId);
+      await services.activity.create(replay.roomId, 'BOARD_REPLAY', `${userName} replayed the board session`, userId);
+      response.json(replay);
+    } catch (error) {
+      next(error);
+    }
+  });
+
   router.post('/boards/:boardId/export/record', async (request, response, next) => {
     try {
       const roomId = await persistence.getBoardRoomId(request.params.boardId);

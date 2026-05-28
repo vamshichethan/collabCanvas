@@ -60,6 +60,8 @@ type CanvasBoardProps = {
   onJsonExport?: (options: ExportOptions) => Promise<BoardJsonExport>;
   onRecordExport?: (exportType: ExportType) => Promise<void>;
   onExportError?: (message: string) => void;
+  replayObjects?: WhiteboardObject[] | null;
+  replayMode?: boolean;
 };
 
 type ToolbarHistoryProps = {
@@ -98,6 +100,8 @@ function CanvasBoard({
   onJsonExport,
   onRecordExport,
   onExportError,
+  replayObjects,
+  replayMode = false,
 }: CanvasBoardProps) {
   const canvasElementRef = useRef<HTMLCanvasElement | null>(null);
   const shellRef = useRef<HTMLDivElement | null>(null);
@@ -221,6 +225,7 @@ function CanvasBoard({
 
   useEffect(() => {
     if (!remoteOperation || remoteOperation.userId === userId) return;
+    if (replayMode) return;
 
     let nextObjects = objectsRef.current;
     if (remoteOperation.type === 'DELETE') {
@@ -230,7 +235,21 @@ function CanvasBoard({
     }
 
     commitObjects(nextObjects, { addToHistory: false, render: true, emit: false });
-  }, [commitObjects, remoteOperation, userId]);
+  }, [commitObjects, remoteOperation, replayMode, userId]);
+
+  useEffect(() => {
+    if (!replayMode || !replayObjects) return;
+    objectsRef.current = replayObjects;
+    setObjects(replayObjects);
+
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    renderingFromStateRef.current = true;
+    loadCanvasFromObjects(canvas, replayObjects);
+    canvas.discardActiveObject();
+    renderingFromStateRef.current = false;
+  }, [replayMode, replayObjects]);
 
   useEffect(() => {
     activeToolRef.current = activeTool;
@@ -239,15 +258,15 @@ function CanvasBoard({
     const canvas = canvasRef.current;
     if (!canvas) return;
 
-    const freeDrawing = activeTool === 'pen' && !readOnly;
+    const freeDrawing = activeTool === 'pen' && !readOnly && !replayMode;
     canvas.isDrawingMode = freeDrawing;
-    canvas.selection = activeTool === 'select' && !readOnly;
+    canvas.selection = activeTool === 'select' && !readOnly && !replayMode;
     canvas.defaultCursor =
       activeTool === 'text' ? 'text' : activeTool === 'eraser' ? 'not-allowed' : freeDrawing ? 'crosshair' : 'default';
 
     canvas.getObjects().forEach((object) => {
-      object.selectable = activeTool === 'select' && !readOnly;
-      object.evented = !readOnly && (activeTool === 'select' || activeTool === 'eraser');
+      object.selectable = activeTool === 'select' && !readOnly && !replayMode;
+      object.evented = !readOnly && !replayMode && (activeTool === 'select' || activeTool === 'eraser');
     });
 
     if (freeDrawing) {
@@ -256,7 +275,7 @@ function CanvasBoard({
       brush.width = settings.strokeWidth;
       canvas.freeDrawingBrush = brush;
     }
-  }, [activeTool, readOnly, settings]);
+  }, [activeTool, readOnly, replayMode, settings]);
 
   const addText = useCallback(
     (canvas: Canvas, x: number, y: number) => {
@@ -341,7 +360,7 @@ function CanvasBoard({
       const tool = activeToolRef.current;
       const pointer = canvas.getPointer(event.e);
       onCursorMove?.(pointer.x, pointer.y);
-      if (readOnly) return;
+      if (readOnly || replayMode) return;
 
       if (tool === 'eraser') {
         eraseTarget(event.e);
@@ -363,7 +382,7 @@ function CanvasBoard({
       isDrawingShapeRef.current = true;
       canvas.add(shape);
     },
-    [addText, createShape, eraseTarget, onCursorMove, readOnly],
+    [addText, createShape, eraseTarget, onCursorMove, readOnly, replayMode],
   );
 
   const handleMouseMove = useCallback(
@@ -372,7 +391,7 @@ function CanvasBoard({
       const shape = shapeRef.current;
 
       if (activeToolRef.current === 'eraser') {
-        if (readOnly) return;
+        if (readOnly || replayMode) return;
         eraseTarget(event.e);
         return;
       }
@@ -404,7 +423,7 @@ function CanvasBoard({
 
       canvas.requestRenderAll();
     },
-    [eraseTarget, onCursorMove, readOnly],
+    [eraseTarget, onCursorMove, readOnly, replayMode],
   );
 
   const handleMouseUp = useCallback(() => {
@@ -495,6 +514,7 @@ function CanvasBoard({
     const handleKeyDown = (event: KeyboardEvent) => {
       const canvas = canvasRef.current;
       if (!canvas) return;
+      if (replayMode) return;
 
       const target = event.target as HTMLElement | null;
       if (target?.tagName === 'INPUT' || target?.tagName === 'SELECT' || target?.tagName === 'TEXTAREA') return;
@@ -517,7 +537,7 @@ function CanvasBoard({
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [commitObjects]);
+  }, [commitObjects, replayMode]);
 
   const handleUndo = useCallback(() => {
     const previousObjects = undo();

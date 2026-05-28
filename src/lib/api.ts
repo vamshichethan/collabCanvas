@@ -9,6 +9,7 @@ import type {
   ObjectComment,
   SummaryType,
   ExportType,
+  ReplayResponse,
   WhiteboardObject,
 } from '../types';
 
@@ -46,6 +47,7 @@ export const api = {
       allowViewerComments?: boolean;
       allowViewerAISummaries?: boolean;
       allowViewerExports?: boolean;
+      allowViewerReplay?: boolean;
       lockBoardEditing?: boolean;
     },
   ) {
@@ -83,6 +85,10 @@ export const api = {
     return request<ObjectComment[]>(`/api/boards/${encodeURIComponent(boardId)}/comments`);
   },
 
+  async getBoard(boardId: string) {
+    return request<{ board: WhiteboardObject[]; lastSequenceNumber: number }>(`/api/boards/${encodeURIComponent(boardId)}`);
+  },
+
   async getAISummaries(boardId: string) {
     return request<AISummaryRecord[]>(`/api/boards/${encodeURIComponent(boardId)}/ai-summaries`);
   },
@@ -113,6 +119,10 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ userId, exportType }),
     });
+  },
+
+  async getReplay(boardId: string, userId: string) {
+    return request<ReplayResponse>(`/api/boards/${encodeURIComponent(boardId)}/replay?userId=${encodeURIComponent(userId)}`);
   },
 
   async createVersion(boardId: string, name: string, createdBy: string) {

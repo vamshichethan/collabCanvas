@@ -7,8 +7,9 @@ import Toolbar from './components/Toolbar';
 import VersionHistoryPanel from './components/VersionHistoryPanel';
 import { getOrCreateIdentity, useRoomCollaboration } from './hooks/useRoomCollaboration';
 import { api } from './lib/api';
+import { buildReplayCache, buildReplayState } from './lib/replay';
 import { getRoomIdFromPath, navigateToRoom } from './lib/room';
-import type { AISummaryRecord, DashboardRoom, DrawingSettings, SummaryType, Tool, WhiteboardObject } from './types';
+import type { AISummaryRecord, DashboardRoom, DrawingSettings, ReplayOperation, SummaryType, Tool, WhiteboardObject } from './types';
 
 function App() {
   const [roomId, setRoomId] = useState(getRoomIdFromPath());
@@ -136,6 +137,12 @@ function RoomPage({ roomId }: { roomId: string }) {
   const [aiSummaries, setAiSummaries] = useState<AISummaryRecord[]>([]);
   const [aiSummaryLoading, setAiSummaryLoading] = useState(false);
   const [aiSummaryError, setAiSummaryError] = useState<string | null>(null);
+  const [replayMode, setReplayMode] = useState(false);
+  const [replayOperations, setReplayOperations] = useState<ReplayOperation[]>([]);
+  const [replayStep, setReplayStep] = useState(0);
+  const [replayPlaying, setReplayPlaying] = useState(false);
+  const [replaySpeed, setReplaySpeed] = useState(1);
+  const [replayLoading, setReplayLoading] = useState(false);
   const inviteLink = useMemo(() => `${window.location.origin}/room/${roomId}`, [roomId]);
   const collaboration = useRoomCollaboration(roomId);
   const currentDbParticipant = room?.participants.find((participant) => participant.userId === collaboration.userId);
@@ -148,7 +155,14 @@ function RoomPage({ roomId }: { roomId: string }) {
   const canComment = canSendChat;
   const canGenerateAISummary = currentRole === 'OWNER' || currentRole === 'EDITOR' || Boolean(room?.allowViewerAISummaries);
   const canExport = currentRole === 'OWNER' || currentRole === 'EDITOR' || Boolean(room?.allowViewerExports);
+  const canReplay = currentRole === 'OWNER' || currentRole === 'EDITOR' || Boolean(room?.allowViewerReplay);
   const boardTitle = room?.boards[0]?.title ?? 'CollabCanvas Board';
+  const replayCache = useMemo(() => buildReplayCache(replayOperations), [replayOperations]);
+  const replayObjects = useMemo(
+    () => (replayMode ? buildReplayState(replayOperations, replayStep, replayCache) : null),
+    [replayCache, replayMode, replayOperations, replayStep],
+  );
+  const currentReplayOperation = replayStep > 0 ? replayOperations[replayStep - 1] : null;
 
   const loadRoom = async () => {
     try {
@@ -190,6 +204,20 @@ function RoomPage({ roomId }: { roomId: string }) {
     setToast(collaboration.conflictMessage);
     collaboration.clearConflictMessage();
   }, [collaboration.conflictMessage, collaboration.clearConflictMessage]);
+
+  useEffect(() => {
+    if (!replayMode || !replayPlaying) return;
+    if (replayStep >= replayOperations.length) {
+      setReplayPlaying(false);
+      return;
+    }
+
+    const timer = window.setTimeout(() => {
+      setReplayStep((current) => Math.min(current + 1, replayOperations.length));
+    }, 900 / replaySpeed);
+
+    return () => window.clearTimeout(timer);
+  }, [replayMode, replayOperations.length, replayPlaying, replaySpeed, replayStep]);
 
   const copyInviteLink = async () => {
     await navigator.clipboard.writeText(inviteLink);
@@ -273,6 +301,42 @@ function RoomPage({ roomId }: { roomId: string }) {
     await api.recordBoardExport(roomId, collaboration.userId, exportType);
   };
 
+  const startReplay = async () => {
+    if (!canReplay) {
+      setToast('You do not have permission to replay this board');
+      return;
+    }
+
+    setReplayLoading(true);
+    setToast(null);
+    try {
+      const replay = await api.getReplay(roomId, collaboration.userId);
+      setReplayOperations(replay.operations);
+      setReplayStep(0);
+      setReplayPlaying(false);
+      setReplayMode(true);
+      setActiveTool('select');
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : 'Unable to load replay');
+    } finally {
+      setReplayLoading(false);
+    }
+  };
+
+  const exitReplay = async () => {
+    setReplayMode(false);
+    setReplayPlaying(false);
+    setReplayStep(0);
+    setReplayOperations([]);
+    try {
+      const liveBoard = await api.getBoard(roomId);
+      setRestoredBoard(liveBoard.board);
+      localStorage.setItem(`collabcanvas:${roomId}:lastSequence`, String(liveBoard.lastSequenceNumber));
+    } catch {
+      setToast('Exited replay. Live board will refresh on the next sync.');
+    }
+  };
+
   return (
     <main className="flex min-h-screen flex-col bg-[#f4f7fb] text-slate-950">
       <header className="border-b border-slate-200 bg-white/92 px-4 py-4 backdrop-blur md:px-6">
@@ -329,7 +393,15 @@ function RoomPage({ roomId }: { roomId: string }) {
             >
               {copied ? 'Copied' : 'Copy invite'}
             </button>
-            <p className="text-xs font-medium uppercase tracking-[0.18em] text-slate-400">Phase 10</p>
+            <button
+              type="button"
+              onClick={startReplay}
+              disabled={replayLoading}
+              className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {replayLoading ? 'Loading replay' : 'Replay'}
+            </button>
+            <p className="text-xs font-medium uppercase tracking-[0.18em] text-slate-400">Phase 11</p>
           </div>
         </div>
       </header>
@@ -350,6 +422,26 @@ function RoomPage({ roomId }: { roomId: string }) {
           onRestore={handleRestore}
           onError={setToast}
         />
+        {replayMode ? (
+          <ReplayPanel
+            step={replayStep}
+            total={replayOperations.length}
+            playing={replayPlaying}
+            speed={replaySpeed}
+            operation={currentReplayOperation}
+            onPlay={() => setReplayPlaying(true)}
+            onPause={() => setReplayPlaying(false)}
+            onRestart={() => {
+              setReplayStep(0);
+              setReplayPlaying(false);
+            }}
+            onNext={() => setReplayStep((current) => Math.min(current + 1, replayOperations.length))}
+            onPrevious={() => setReplayStep((current) => Math.max(current - 1, 0))}
+            onSpeedChange={setReplaySpeed}
+            onStepChange={(step) => setReplayStep(step)}
+            onExit={() => void exitReplay()}
+          />
+        ) : null}
         <div className="grid min-h-0 gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
           <CanvasBoard
             activeTool={activeTool}
@@ -358,23 +450,25 @@ function RoomPage({ roomId }: { roomId: string }) {
             userId={collaboration.userId}
             userName={collaboration.userName}
             initialObjects={restoredBoard ?? collaboration.initialBoard}
-            remoteOperation={collaboration.remoteOperation}
+            remoteOperation={replayMode ? null : collaboration.remoteOperation}
             remoteCursors={collaboration.remoteCursors}
             comments={collaboration.comments}
+            replayMode={replayMode}
+            replayObjects={replayObjects}
             boardTitle={boardTitle}
             canExport={canExport}
-            onLocalOperation={collaboration.emitOperation}
+            onLocalOperation={replayMode ? undefined : collaboration.emitOperation}
             onCursorMove={collaboration.emitCursor}
             onSelectedObjectChange={setSelectedObjectId}
             onJsonExport={exportJson}
             onRecordExport={recordExport}
             onExportError={setToast}
-            readOnly={readOnly}
+            readOnly={readOnly || replayMode}
             toolbar={
               <Toolbar
                 activeTool={activeTool}
                 settings={settings}
-                disabled={readOnly}
+                disabled={readOnly || replayMode}
                 onToolChange={setActiveTool}
                 onSettingsChange={setSettings}
               />
@@ -384,9 +478,9 @@ function RoomPage({ roomId }: { roomId: string }) {
             currentUserId={collaboration.userId}
             currentRole={currentRole}
             selectedObjectId={selectedObjectId}
-            canSendChat={canSendChat}
-            canComment={canComment}
-            canGenerateAISummary={canGenerateAISummary}
+            canSendChat={canSendChat && !replayMode}
+            canComment={canComment && !replayMode}
+            canGenerateAISummary={canGenerateAISummary && !replayMode}
             chatMessages={collaboration.chatMessages}
             comments={collaboration.comments}
             activityItems={collaboration.activityItems}
@@ -406,6 +500,91 @@ function RoomPage({ roomId }: { roomId: string }) {
 }
 
 export default App;
+
+function ReplayPanel({
+  step,
+  total,
+  playing,
+  speed,
+  operation,
+  onPlay,
+  onPause,
+  onRestart,
+  onNext,
+  onPrevious,
+  onSpeedChange,
+  onStepChange,
+  onExit,
+}: {
+  step: number;
+  total: number;
+  playing: boolean;
+  speed: number;
+  operation: ReplayOperation | null;
+  onPlay: () => void;
+  onPause: () => void;
+  onRestart: () => void;
+  onNext: () => void;
+  onPrevious: () => void;
+  onSpeedChange: (speed: number) => void;
+  onStepChange: (step: number) => void;
+  onExit: () => void;
+}) {
+  const objectType = operation?.payload?.type ?? operation?.previousPayload?.type ?? 'object';
+
+  return (
+    <section className="rounded-2xl border border-blue-200 bg-blue-50 p-4 shadow-sm">
+      <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-blue-500">Replay Mode</p>
+          <h2 className="mt-1 text-lg font-semibold text-blue-950">
+            Step {step} / {total}
+          </h2>
+          <p className="mt-1 text-sm text-blue-800">
+            {operation
+              ? `${operation.userName} ${operation.type.toLowerCase()}d ${objectType} · ${new Date(operation.serverTimestamp).toLocaleTimeString()}`
+              : 'Ready to replay the board session'}
+          </p>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <button type="button" onClick={playing ? onPause : onPlay} className="rounded-lg bg-blue-600 px-3 py-2 text-sm font-semibold text-white">
+            {playing ? 'Pause' : 'Play'}
+          </button>
+          <button type="button" onClick={onRestart} className="rounded-lg border border-blue-200 bg-white px-3 py-2 text-sm font-semibold text-blue-700">
+            Restart
+          </button>
+          <button type="button" onClick={onPrevious} className="rounded-lg border border-blue-200 bg-white px-3 py-2 text-sm font-semibold text-blue-700">
+            Previous
+          </button>
+          <button type="button" onClick={onNext} className="rounded-lg border border-blue-200 bg-white px-3 py-2 text-sm font-semibold text-blue-700">
+            Next
+          </button>
+          <select
+            value={speed}
+            onChange={(event) => onSpeedChange(Number(event.target.value))}
+            className="rounded-lg border border-blue-200 bg-white px-3 py-2 text-sm font-semibold text-blue-700"
+          >
+            <option value={0.5}>0.5x</option>
+            <option value={1}>1x</option>
+            <option value={2}>2x</option>
+            <option value={4}>4x</option>
+          </select>
+          <button type="button" onClick={onExit} className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700">
+            Exit replay
+          </button>
+        </div>
+      </div>
+      <input
+        type="range"
+        min="0"
+        max={total}
+        value={step}
+        onChange={(event) => onStepChange(Number(event.target.value))}
+        className="mt-4 w-full accent-blue-600"
+      />
+    </section>
+  );
+}
 
 const roleToDb = (role: 'owner' | 'editor' | 'viewer') => {
   if (role === 'owner') return 'OWNER';

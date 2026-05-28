@@ -12,6 +12,7 @@ export type PermissionAction =
   | 'RESTORE_VERSION'
   | 'GENERATE_AI_SUMMARY'
   | 'EXPORT_BOARD'
+  | 'REPLAY_BOARD'
   | 'DELETE_ROOM'
   | 'UPDATE_ROOM_SETTINGS';
 
@@ -27,6 +28,7 @@ const ownerActions: PermissionAction[] = [
   'RESTORE_VERSION',
   'GENERATE_AI_SUMMARY',
   'EXPORT_BOARD',
+  'REPLAY_BOARD',
   'DELETE_ROOM',
   'UPDATE_ROOM_SETTINGS',
 ];
@@ -39,6 +41,7 @@ const editorActions: PermissionAction[] = [
   'CREATE_VERSION',
   'GENERATE_AI_SUMMARY',
   'EXPORT_BOARD',
+  'REPLAY_BOARD',
 ];
 const viewerActions: PermissionAction[] = [];
 

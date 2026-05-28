@@ -121,6 +121,7 @@ export class PersistenceManager {
       allowViewerComments?: boolean;
       allowViewerAISummaries?: boolean;
       allowViewerExports?: boolean;
+      allowViewerReplay?: boolean;
       lockBoardEditing?: boolean;
     },
   ) {
@@ -247,6 +248,36 @@ export class PersistenceManager {
     });
 
     return operations.map((operation) => this.toBoardOperation(operation));
+  }
+
+  async getReplayOperations(boardId: string) {
+    const board = await this.prisma.board.findUniqueOrThrow({ where: { id: boardId }, select: { roomId: true } });
+    const operations = await this.prisma.drawingOperation.findMany({
+      where: { boardId },
+      include: { user: true },
+      orderBy: { sequenceNumber: 'asc' },
+    });
+
+    return {
+      boardId,
+      roomId: board.roomId,
+      operations: operations.map((operation) => ({
+        opId: operation.opId,
+        type: operation.type,
+        objectId: operation.objectId,
+        payload: operation.payload as WhiteboardObject | null,
+        previousPayload: operation.previousPayload as WhiteboardObject | null,
+        userId: operation.userId,
+        userName: operation.user.name,
+        sequenceNumber: operation.sequenceNumber,
+        serverTimestamp: operation.serverTimestamp.getTime(),
+      })),
+    };
+  }
+
+  async getUserName(userId: string) {
+    const user = await this.prisma.user.findUnique({ where: { id: userId }, select: { name: true } });
+    return user?.name ?? userId;
   }
 
   async listVersions(boardId: string) {

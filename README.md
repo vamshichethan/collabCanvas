@@ -213,7 +213,7 @@ Use Neon PostgreSQL or Supabase PostgreSQL by putting the connection string in `
 - `POST /api/rooms` creates a persisted room, board, owner participant, and invite code.
 - `GET /api/rooms/:roomId` returns room details, boards, and participants.
 - `POST /api/rooms/:roomId/join` persists participant membership.
-- `PATCH /api/rooms/:roomId/settings` updates public/private, viewer comments, viewer AI summaries, viewer exports, and board lock settings.
+- `PATCH /api/rooms/:roomId/settings` updates public/private, viewer comments, viewer AI summaries, viewer exports, viewer replay, and board lock settings.
 - `POST /api/rooms/:roomId/regenerate-invite` regenerates the invite code.
 - `POST /api/rooms/:roomId/participants` invites a participant.
 - `PATCH /api/rooms/:roomId/participants/:userId` changes a participant role.
@@ -231,6 +231,7 @@ Use Neon PostgreSQL or Supabase PostgreSQL by putting the connection string in `
 - `POST /api/boards/:boardId/ai-summary` generates and saves an AI summary.
 - `GET /api/boards/:boardId/export/json` returns source-of-truth structured board export JSON.
 - `POST /api/boards/:boardId/export/record` records PNG, PDF, or JSON export activity.
+- `GET /api/boards/:boardId/replay` returns ordered drawing operations for replay mode.
 
 ## Snapshots And Versions
 
@@ -240,8 +241,8 @@ Autosave snapshots are created every 25 accepted drawing operations. Each snapsh
 
 Permissions are centralized in `backend/src/permissionManager.ts`, `backend/src/roleGuards.ts`, and `backend/src/permissionMiddleware.ts`. The backend never trusts the frontend role; every REST mutation and Socket.IO drawing operation checks the persisted `Participant.role` in PostgreSQL.
 
-- `OWNER`: can draw, edit, delete, comment, invite, change roles, update room settings, create/restore versions, generate AI summaries, export, and transfer ownership.
-- `EDITOR`: can draw, edit objects, delete own objects, comment, create versions, generate AI summaries, and export.
+- `OWNER`: can draw, edit, delete, comment, invite, change roles, update room settings, create/restore versions, generate AI summaries, export, replay, and transfer ownership.
+- `EDITOR`: can draw, edit objects, delete own objects, comment, create versions, generate AI summaries, export, and replay.
 - `VIEWER`: can view the board, move cursors, read chat, and comment only when `allowViewerComments` is enabled.
 
 Viewer mode is enforced twice: the frontend disables drawing controls and passes `readOnly` into the board, while the backend still rejects viewer drawing operations through `operation:submit`. Editors are also blocked from role changes, room settings changes, and version restores. If `lockBoardEditing` is enabled, only owners can keep editing.
@@ -317,3 +318,13 @@ Browser `online`/`offline` events and Socket.IO disconnect/reconnect events driv
 When the socket reconnects, the client first requests missed operations after `lastSeenSequenceNumber`, applies server-ordered remote changes, detects object conflicts against local pending edits, and only then submits the remaining local queue with `operation:submit-batch`. The backend validates each operation independently, persists accepted operations through the existing ordered operation log, returns `operation:batch-ack`, and broadcasts accepted operations to the rest of the room.
 
 Conflict handling is intentionally simple: server sequence order wins. If an offline edit touched an object that also changed remotely, the local queued operation is marked `FAILED`, the user sees a conflict notification, and the remote board remains the source of truth. Failed operations are never discarded silently; they remain visible through the retry count/status path.
+
+## Replay Mode
+
+Replay mode uses `DrawingOperation` as the source of truth. `GET /api/boards/:boardId/replay` returns accepted operations ordered by `sequenceNumber` with operation type, payload, previous payload, user, sequence number, and server timestamp. The endpoint also records activity such as `Vamshi replayed the board session`.
+
+The frontend keeps replay state separate from live board state. Entering replay mode loads operations, clears the rendered replay board, and applies operations step by step with `applyReplayOperation()`. Previous and slider navigation rebuild board state from the beginning, with cached snapshots every 50 operations for larger sessions.
+
+Replay controls include play, pause, restart, next, previous, speed selection, progress slider, timeline details, and exit. While replay mode is active, the drawing toolbar and chat/comment actions are disabled and local operations are not sent. Exiting replay reloads the live board from the backend so replay never mutates real board state.
+
+Owners and editors can replay. Viewers can replay only when `allowViewerReplay` is enabled for the room.

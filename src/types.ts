@@ -110,6 +110,7 @@ export type DashboardRoom = {
   allowViewerComments: boolean;
   allowViewerAISummaries: boolean;
   allowViewerExports: boolean;
+  allowViewerReplay: boolean;
   lockBoardEditing: boolean;
   ownerId: string;
   boards: Array<{
@@ -186,7 +187,8 @@ export type ActivityType =
   | 'COMMENT_ADD'
   | 'VERSION_CREATE'
   | 'VERSION_RESTORE'
-  | 'BOARD_EXPORT';
+  | 'BOARD_EXPORT'
+  | 'BOARD_REPLAY';
 
 export type ActivityItem = {
   id: string;
@@ -219,4 +221,22 @@ export type BoardExportRecord = {
   exportedByName: string;
   exportType: ExportType;
   createdAt: string;
+};
+
+export type ReplayOperation = {
+  opId: string;
+  type: OperationType;
+  objectId: string;
+  payload: WhiteboardObject | null;
+  previousPayload?: WhiteboardObject | null;
+  userId: string;
+  userName: string;
+  sequenceNumber: number;
+  serverTimestamp: number;
+};
+
+export type ReplayResponse = {
+  boardId: string;
+  roomId: string;
+  operations: ReplayOperation[];
 };

@@ -8,6 +8,7 @@ type RoomSettingsPanelProps = {
     allowViewerComments?: boolean;
     allowViewerAISummaries?: boolean;
     allowViewerExports?: boolean;
+    allowViewerReplay?: boolean;
     lockBoardEditing?: boolean;
   }) => void;
   onRegenerateInvite: () => void;
@@ -22,7 +23,7 @@ function RoomSettingsPanel({ room, isOwner, onChange, onRegenerateInvite }: Room
         <h2 className="text-sm font-semibold text-slate-900">Room settings</h2>
         <span className="text-xs font-semibold text-slate-400">{room.inviteCode}</span>
       </div>
-      <div className="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
+      <div className="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-7">
         <label className="flex items-center justify-between gap-3 rounded-lg border border-slate-200 px-3 py-2 text-sm">
           Public
           <input
@@ -70,6 +71,16 @@ function RoomSettingsPanel({ room, isOwner, onChange, onRegenerateInvite }: Room
             checked={room.allowViewerExports}
             disabled={!isOwner}
             onChange={(event) => onChange({ allowViewerExports: event.target.checked })}
+            className="accent-blue-600"
+          />
+        </label>
+        <label className="flex items-center justify-between gap-3 rounded-lg border border-slate-200 px-3 py-2 text-sm">
+          Viewer replay
+          <input
+            type="checkbox"
+            checked={room.allowViewerReplay}
+            disabled={!isOwner}
+            onChange={(event) => onChange({ allowViewerReplay: event.target.checked })}
             className="accent-blue-600"
           />
         </label>

@@ -33,6 +33,7 @@ enum ActivityType {
   VERSION_CREATE
   VERSION_RESTORE
   BOARD_EXPORT
+  BOARD_REPLAY
 }
 
 enum SummaryType {
@@ -76,6 +77,7 @@ model Room {
   allowViewerComments    Boolean            @default(false)
   allowViewerAISummaries Boolean            @default(false)
   allowViewerExports     Boolean            @default(false)
+  allowViewerReplay      Boolean            @default(false)
   lockBoardEditing       Boolean            @default(false)
   ownerId                String
   owner                  User               @relation("RoomOwner", fields: [ownerId], references: [id])
