@@ -1,12 +1,34 @@
 <div align="center">
-  <h1>🎨 CollabCanvas</h1>
-  <p><strong>Room-based collaborative whiteboard built with React, TypeScript, Tailwind CSS, Fabric.js, Node.js, Express, and Socket.IO.</strong></p>
-  
-  <p>
-    <a href="https://collabcanvas-eight.vercel.app"><b>Live Frontend</b></a> • 
-    <a href="https://collabcanvas-backend-o0ft.onrender.com/api/health"><b>Backend Health Check</b></a>
-  </p>
+
+# 🎨 CollabCanvas
+
+**🖌️ Whiteboard • 📡 Real-Time • 🔐 Authenticated • 💾 Persistent • 🤖 AI Summaries • 📴 Offline Sync**
+
+**🖍️ Draw together. 💬 Chat in real-time. 📌 Comment on objects. 🤖 Summarize with AI. 💾 Save versions and replay history.**
+
+![Frontend](https://img.shields.io/badge/FRONTEND-REACT_+_TYPESCRIPT-blue?style=for-the-badge&logo=react)
+![Styling](https://img.shields.io/badge/STYLING-TAILWIND_CSS-06B6D4?style=for-the-badge&logo=tailwindcss)
+![Backend](https://img.shields.io/badge/BACKEND-NODE.JS_+_EXPRESS-339933?style=for-the-badge&logo=node.js)
+![Real-time](https://img.shields.io/badge/REAL--TIME-SOCKET.IO-010101?style=for-the-badge&logo=socket.io)
+![Database](https://img.shields.io/badge/DATABASE-POSTGRESQL-4169E1?style=for-the-badge&logo=postgresql)
+![AI](https://img.shields.io/badge/AI-GOOGLE_GEMINI-8E75B2?style=for-the-badge&logo=google)
+![Status](https://img.shields.io/badge/STATUS-DEPLOYED-success?style=for-the-badge)
+
+🚀 **Live App:** [collabcanvas-eight.vercel.app](https://collabcanvas-eight.vercel.app)
+🩺 **Backend Health:** [collabcanvas-backend-o0ft.onrender.com/api/health](https://collabcanvas-backend-o0ft.onrender.com/api/health)
+📁 **Repository:** [GitHub](https://github.com/vamshichethan/collabCanvas)
+
+[🚀 Live Deployment](#-production-deployment) • [✨ Features](#-feature-list) • [🏗️ Architecture](#️-architecture) • [🛠️ Setup Instructions](#️-setup-instructions) • [🧪 Testing](#-testing)
+
 </div>
+
+---
+
+## 🌟 Project Overview
+
+**CollabCanvas** is a room-based collaborative whiteboard built with React, TypeScript, Tailwind CSS, Fabric.js, Node.js, Express, and Socket.IO. 
+
+It features authenticated room-based whiteboards with role permissions, a structured object model rendered through Fabric.js, and an ordered operation log with optimistic sync, reconnect recovery, offline queue, and replay mode.
 
 ---
 
